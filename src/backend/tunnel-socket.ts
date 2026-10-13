@@ -4,6 +4,13 @@ import { isPrivateAddress, toSocketHostname } from './security';
 export function wrapWebSocketAsSocket(ws: WebSocket, remoteAddress: string): Socket {
   let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
   let streamClosed = false;
+  let pendingBlobChain: Promise<void> | null = null;
+
+  try {
+    (ws as unknown as { binaryType?: string }).binaryType = 'arraybuffer';
+  } catch {
+    // Ignore if the runtime does not permit setting binaryType
+  }
 
   const closeReadable = () => {
     if (streamClosed) return;
@@ -25,6 +32,31 @@ export function wrapWebSocketAsSocket(ws: WebSocket, remoteAddress: string): Soc
     }
   };
 
+  const enqueueBytes = (bytes: Uint8Array) => {
+    if (streamClosed || !streamController || bytes.byteLength === 0) return;
+    try {
+      streamController.enqueue(bytes);
+    } catch {
+      // Controller may already be closed
+    }
+  };
+
+  const extractSyncBytes = (data: unknown): Uint8Array | null => {
+    if (data instanceof ArrayBuffer || Object.prototype.toString.call(data) === '[object ArrayBuffer]') {
+      const buf = data as ArrayBuffer;
+      return buf.byteLength > 0 ? new Uint8Array(buf) : new Uint8Array(0);
+    }
+    if (ArrayBuffer.isView(data)) {
+      return data.byteLength > 0
+        ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+        : new Uint8Array(0);
+    }
+    if (typeof data === 'string') {
+      return data.length > 0 ? new TextEncoder().encode(data) : new Uint8Array(0);
+    }
+    return null;
+  };
+
   const readable = new ReadableStream<Uint8Array>({
     start(controller) {
       streamController = controller;
@@ -41,21 +73,34 @@ export function wrapWebSocketAsSocket(ws: WebSocket, remoteAddress: string): Soc
 
   ws.addEventListener('message', (event: MessageEvent) => {
     if (streamClosed || !streamController) return;
-    try {
-      if (event.data instanceof ArrayBuffer) {
-        if (event.data.byteLength > 0) {
-          streamController.enqueue(new Uint8Array(event.data));
-        }
-      } else if (ArrayBuffer.isView(event.data)) {
-        const view = event.data;
-        if (view.byteLength > 0) {
-          streamController.enqueue(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
-        }
-      } else if (typeof event.data === 'string' && event.data.length > 0) {
-        streamController.enqueue(new TextEncoder().encode(event.data));
-      }
-    } catch {
-      // Controller may already be closed
+    const data = event.data as unknown;
+    const syncBytes = extractSyncBytes(data);
+    if (syncBytes !== null && !pendingBlobChain) {
+      enqueueBytes(syncBytes);
+      return;
+    }
+    if (syncBytes !== null && pendingBlobChain) {
+      pendingBlobChain = pendingBlobChain.then(() => {
+        enqueueBytes(syncBytes);
+      });
+      return;
+    }
+    if (data && typeof (data as Blob).arrayBuffer === 'function') {
+      const prev = pendingBlobChain ?? Promise.resolve();
+      const next = prev
+        .then(() => (data as Blob).arrayBuffer())
+        .then((buf) => {
+          enqueueBytes(new Uint8Array(buf));
+        })
+        .catch((err) => {
+          errorReadable(err);
+        })
+        .finally(() => {
+          if (pendingBlobChain === next) {
+            pendingBlobChain = null;
+          }
+        });
+      pendingBlobChain = next;
     }
   });
 
@@ -65,8 +110,15 @@ export function wrapWebSocketAsSocket(ws: WebSocket, remoteAddress: string): Soc
   });
 
   ws.addEventListener('close', () => {
-    closeReadable();
-    resolveClosed();
+    if (pendingBlobChain) {
+      void pendingBlobChain.finally(() => {
+        closeReadable();
+        resolveClosed();
+      });
+    } else {
+      closeReadable();
+      resolveClosed();
+    }
   });
 
   ws.addEventListener('error', (event) => {
