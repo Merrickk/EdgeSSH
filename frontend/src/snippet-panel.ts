@@ -27,7 +27,7 @@ export class SnippetPanel {
     container.append(this.root);
     this.toggle.addEventListener('click', () => this.setCollapsed(!this.body.hidden));
     this.root.querySelector('.snippet-manage')!.addEventListener('click', openLibrary);
-    this.setCollapsed(true);
+    this.setCollapsed(matchMedia('(max-width: 700px)').matches);
     this.bindDrag();
     // 终端侧栏、全屏和横竖屏切换都会改变可用空间，保持拖动后的标题栏仍可触达。
     const observer = new ResizeObserver(() => this.constrain());

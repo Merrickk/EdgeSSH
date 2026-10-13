@@ -3238,60 +3238,20 @@ body[data-view='workspace'] .brand-mark {
   border-radius: 8px;
 }
 
-/* Workspace Topbar Navigation */
-.workspace-topbar-nav {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-inline: auto;
-  padding: 3px;
-  border: 1px solid var(--home-line, #e9ecf1);
-  border-radius: 10px;
-  background: var(--home-bg, #fafbfd);
-}
-
-.workspace-topbar-nav .ws-nav-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+/* Workspace Topbar Navigation Buttons */
+body[data-view='workspace'] .icon-button.home-back {
   height: 32px;
-  padding: 0 12px;
-  border: 1px solid transparent;
+  padding-inline: 11px;
+  border: 1px solid var(--home-line, #e9ecf1);
   border-radius: 7px;
-  background: transparent;
-  color: var(--home-muted, #667085);
-  font-size: 12.5px;
-  font-weight: 600;
-  white-space: nowrap;
-  transition: background 140ms ease, color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
-}
-
-.workspace-topbar-nav .ws-nav-item svg {
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.85;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  flex: 0 0 auto;
-}
-
-.workspace-topbar-nav .ws-nav-item:hover {
   background: var(--home-surface, #ffffff);
-  color: var(--home-accent, #f4511e);
-  border-color: var(--home-line, #e9ecf1);
-  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.05);
-}
-
-.workspace-topbar-nav .ws-nav-back {
   color: var(--home-ink, #111827);
-  background: var(--home-surface, #ffffff);
-  border-color: var(--home-line, #e9ecf1);
+  font-size: 12px;
+  font-weight: 600;
   box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04);
 }
 
-.workspace-topbar-nav .ws-nav-back:hover {
+body[data-view='workspace'] .icon-button.home-back:hover {
   border-color: var(--home-accent, #f4511e);
   background: var(--home-accent-soft, #fff0e9);
   color: var(--home-accent, #f4511e);
@@ -3620,11 +3580,13 @@ body[data-view='workspace'] .snippet-panel-badge {
   color: var(--home-accent, #f4511e);
 }
 
-@media (max-width: 860px) {
-  .workspace-topbar-nav .ws-nav-item span {
-    display: none;
+@media (max-width: 760px) {
+  body[data-view='workspace'] .topbar-actions {
+    gap: 6px;
   }
-  .workspace-topbar-nav .ws-nav-item {
-    padding: 0 9px;
+  body[data-view='workspace'] .icon-button.home-back {
+    height: 30px;
+    padding-inline: 7px;
+    font-size: 11px;
   }
 }
