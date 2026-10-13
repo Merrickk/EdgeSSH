@@ -24,13 +24,15 @@ export interface CloudHost {
   termType: string;
   encoding: string;
   fingerprint: string;
+  cfTunnel?: boolean;
+  cfAccessClientId?: string;
   location: HostLocation | null;
   system: HostSystemInfo | null;
   hasCredential: boolean;
   updatedAt: number;
 }
 
-export interface Credentials { password?: string; privateKey?: string }
+export interface Credentials { password?: string; privateKey?: string; cfAccessClientSecret?: string }
 export type HostInput = Omit<CloudHost, 'id' | 'location' | 'system' | 'hasCredential' | 'updatedAt'> & Credentials;
 
 export class APIError extends Error {

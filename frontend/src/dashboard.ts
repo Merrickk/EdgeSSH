@@ -96,9 +96,12 @@ export class Dashboard {
             <label class="wide">主机地址<input name="host" maxlength="253" placeholder="IP 地址或域名" required spellcheck="false"></label>
             <label>SSH 用户名<input name="username" value="root" maxlength="128" required spellcheck="false"></label>
             <label>端口<input name="port" type="number" min="1" max="65535" value="22" required></label>
+            <label class="wide">连接模式<select name="cfTunnel"><option value="false">直连 (标准 TCP SSH)</option><option value="true">Cloudflare Tunnel (WebSocket 隧道)</option></select></label>
             <label class="wide">认证方式<select name="authMethod"><option value="password">密码</option><option value="publickey">OpenSSH 私钥</option></select></label>
             <label class="wide" id="cloud-password-field">密码<input name="password" type="password" maxlength="4096" autocomplete="new-password"><small class="credential-help">密码会由 Worker 加密后保存。</small></label>
             <label class="wide" id="cloud-key-field" hidden>私钥<textarea name="privateKey" rows="5" maxlength="65536" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false"></textarea><small class="credential-help">仅支持未加密的 OpenSSH 私钥。</small></label>
+            <label id="cloud-cf-id-field" hidden>CF Access Client ID (可选)<input name="cfAccessClientId" maxlength="256" placeholder="Service Token ID (无 Access 保护留空)" spellcheck="false"></label>
+            <label id="cloud-cf-secret-field" hidden>CF Access Secret (可选)<input name="cfAccessClientSecret" type="password" maxlength="256" placeholder="Service Token Secret" autocomplete="new-password"></label>
           </div>
           <details class="host-advanced"><summary>高级设置</summary><div class="host-form-grid">
             <label class="wide">主机指纹<input name="fingerprint" placeholder="SHA256:…，首次连接时确认" maxlength="128"></label>
@@ -147,6 +150,7 @@ export class Dashboard {
       this.openWorkspace(); this.actions.quickConnect();
     });
     this.field('authMethod').addEventListener('change', () => this.updateCredentialFields());
+    this.field('cfTunnel').addEventListener('change', () => this.updateCredentialFields());
     this.form.addEventListener('submit', (event) => { event.preventDefault(); void this.save(); });
     this.get('#pause-globe').addEventListener('click', () => {
       this.paused = !this.paused;
@@ -350,7 +354,9 @@ export class Dashboard {
         symbol.setAttribute('aria-label', systemLabel);
         const copy = document.createElement('div'); copy.className = 'host-copy';
         const name = document.createElement('strong'); name.textContent = host.name;
-        const address = document.createElement('span'); address.textContent = `${host.username}@${host.host}:${host.port}`; address.title = address.textContent;
+        const address = document.createElement('span');
+        address.textContent = host.cfTunnel ? `${host.username}@${host.host} · CF Tunnel` : `${host.username}@${host.host}:${host.port}`;
+        address.title = address.textContent;
         copy.append(name, address);
         const location = document.createElement('span'); location.className = 'host-location';
         const locationText = document.createElement('span'); locationText.className = 'host-location-text';
@@ -418,7 +424,9 @@ export class Dashboard {
     for (const name of ['name', 'group', 'host', 'port', 'username', 'authMethod', 'fingerprint', 'initialCommand', 'termType', 'encoding'] as const) {
       if (host) this.field(name).value = String(host[name]);
     }
-    this.root.querySelectorAll('.credential-help').forEach((node) => { node.textContent = host ? '留空保留已保存的凭据；切换认证方式时需填写新凭据。' : '凭据仅由 Worker 加密后存入 D1。'; });
+    this.field('cfTunnel').value = host?.cfTunnel ? 'true' : 'false';
+    this.field('cfAccessClientId').value = host?.cfAccessClientId ?? '';
+    this.field('cfAccessClientSecret').value = '';
     const groups = this.get('#host-groups'); groups.replaceChildren();
     for (const group of new Set(this.hosts.map((item) => item.group))) {
       const option = document.createElement('option'); option.value = group; groups.append(option);
@@ -432,18 +440,26 @@ export class Dashboard {
     const key = this.field('authMethod').value === 'publickey';
     this.get('#cloud-password-field').hidden = key;
     this.get('#cloud-key-field').hidden = !key;
+    const isTunnel = this.field('cfTunnel').value === 'true';
+    this.get('#cloud-cf-id-field').hidden = !isTunnel;
+    this.get('#cloud-cf-secret-field').hidden = !isTunnel;
   }
-
   private async save(): Promise<void> {
     if (this.busy || !this.form.reportValidity()) return;
     this.busy = true;
     const button = this.get<HTMLButtonElement>('#save-cloud-host'); button.disabled = true; button.textContent = '加密保存中…';
     const value = (name: string) => this.field(name).value;
+    const isTunnel = value('cfTunnel') === 'true';
     const input: HostInput = {
       name: value('name'), group: value('group'), host: value('host').trim(), port: Number(value('port')),
       username: value('username').trim(), authMethod: value('authMethod') as HostInput['authMethod'],
       fingerprint: value('fingerprint').trim(), initialCommand: value('initialCommand'), termType: value('termType'), encoding: value('encoding'),
+      cfTunnel: isTunnel,
+      cfAccessClientId: isTunnel ? value('cfAccessClientId').trim() : '',
     };
+    if (isTunnel && value('cfAccessClientSecret').trim()) {
+      input.cfAccessClientSecret = value('cfAccessClientSecret').trim();
+    }
     const credential = input.authMethod === 'password' ? 'password' : 'privateKey';
     if (value(credential) || !this.editing || this.editing.authMethod !== input.authMethod) input[credential] = value(credential);
     try {

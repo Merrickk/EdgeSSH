@@ -3,6 +3,7 @@ import { parseConnectMessage, type Env } from '../types';
 import { assertPublicTarget, toSocketHostname } from './security';
 import { createTicket, verifyTicket } from './security';
 import { SSHSession } from './session';
+import { openCloudflareTunnelSocket } from './tunnel-socket';
 import { ForwardingState } from '../forwarding/state';
 import { FORWARD_RETENTION_MS, previewError } from '../forwarding/security';
 
@@ -193,18 +194,30 @@ export class SSHSessionDO implements DurableObject {
       ws.serializeAttachment({ role: 'main', phase: 'connecting' } satisfies MainAttachment);
       this.clearDeadline(ws);
       if (config.port === 25) throw new Error('Cloudflare Workers cannot connect to outbound TCP port 25');
-      const verifiedAddresses = await assertPublicTarget(config.host);
-      this.assertConnectionActive(ws, pending);
-      ws.send(JSON.stringify({
-        type: 'status',
-        event: 'tcp_connecting',
-        message: `Connecting to ${toSocketHostname(config.host)}:${config.port}`,
-      }));
+      let socket: Socket;
+      if (config.cfTunnel) {
+        ws.send(JSON.stringify({
+          type: 'status',
+          event: 'tcp_connecting',
+          message: `Connecting via Cloudflare Tunnel to ${toSocketHostname(config.host)}`,
+        }));
+        socket = await openCloudflareTunnelSocket(config, this.connectTimeout());
+        pending.socket = socket;
+        this.assertConnectionActive(ws, pending, socket);
+      } else {
+        const verifiedAddresses = await assertPublicTarget(config.host);
+        this.assertConnectionActive(ws, pending);
+        ws.send(JSON.stringify({
+          type: 'status',
+          event: 'tcp_connecting',
+          message: `Connecting to ${toSocketHostname(config.host)}:${config.port}`,
+        }));
 
-      // Connect to the exact address that passed SSRF validation. Keeping the
-      // original hostname only for host-key pinning prevents DNS rebinding.
-      const socket = await this.openVerifiedAddress(verifiedAddresses, config.port, pending);
-      this.assertConnectionActive(ws, pending, socket);
+        // Connect to the exact address that passed SSRF validation. Keeping the
+        // original hostname only for host-key pinning prevents DNS rebinding.
+        socket = await this.openVerifiedAddress(verifiedAddresses, config.port, pending);
+        this.assertConnectionActive(ws, pending, socket);
+      }
 
       const ssh = new SSHSession(ws, socket, config);
       const token = this.sftpTokenByMainWebSocket.get(ws);

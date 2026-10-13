@@ -17,6 +17,9 @@ export interface HostPayload {
   termType: string;
   encoding: string;
   fingerprint: string;
+  cfTunnel?: boolean;
+  cfAccessClientId?: string;
+  cfAccessClientSecret?: string;
   location: HostLocation | null;
   locationCheckedAt?: number;
   system?: SystemInfo | null;
@@ -27,8 +30,8 @@ const LOCATION_RETRY_MS = 24 * 60 * 60 * 1000;
 const LOCATION_REFRESH_BATCH = 8;
 
 function metadata(id: string, payload: HostPayload, updatedAt: number) {
-  const { password, privateKey, locationCheckedAt, ...safe } = payload;
-  return { ...safe, system: payload.system ?? null, id, updatedAt, hasCredential: password !== undefined || Boolean(privateKey) };
+  const { password, privateKey, cfAccessClientSecret, locationCheckedAt, ...safe } = payload;
+  return { ...safe, cfTunnel: Boolean(payload.cfTunnel), cfAccessClientId: payload.cfAccessClientId ?? '', system: payload.system ?? null, id, updatedAt, hasCredential: password !== undefined || Boolean(privateKey) };
 }
 
 async function refreshLocation(payload: HostPayload): Promise<void> {
@@ -59,11 +62,16 @@ function validate(body: Record<string, unknown>, previous?: HostPayload): HostPa
   const credential = authMethod === 'publickey'
     ? { privateKey: body.privateKey ?? (previous && previous.authMethod === authMethod ? previous.privateKey : undefined) }
     : { password: body.password ?? (previous && previous.authMethod === authMethod ? previous.password : undefined) };
+  const cfTunnel = Boolean(body.cfTunnel);
+  const cfAccessClientId = text(body, 'cfAccessClientId', 256).trim();
+  const rawSecret = body.cfAccessClientSecret !== undefined ? text(body, 'cfAccessClientSecret', 256).trim() : (previous?.cfAccessClientSecret ?? '');
+  const cfAccessClientSecret = cfTunnel ? rawSecret : '';
   let connection;
   try {
     connection = parseConnectMessage({
       type: 'connect', host: body.host, port: body.port, username: body.username, authMethod, ...credential,
       term: body.termType, expectedFingerprint: body.fingerprint || undefined,
+      cfTunnel, ...(cfAccessClientId ? { cfAccessClientId } : {}), ...(cfAccessClientSecret ? { cfAccessClientSecret } : {}),
     });
   } catch { throw new APIError('请检查主机地址、端口、用户名、凭据和指纹格式。'); }
   if (connection.port === 25) throw new APIError('不支持端口 25。');
@@ -75,7 +83,11 @@ function validate(body: Record<string, unknown>, previous?: HostPayload): HostPa
     host: connection.host, port: connection.port, username: connection.username,
     authMethod: connection.authMethod, password: connection.password, privateKey: connection.privateKey,
     initialCommand: text(body, 'initialCommand', 4096), termType: connection.term,
-    encoding, fingerprint: connection.expectedFingerprint ?? '', location: previous?.location ?? null,
+    encoding, fingerprint: connection.expectedFingerprint ?? '',
+    cfTunnel: Boolean(connection.cfTunnel),
+    cfAccessClientId: connection.cfAccessClientId ?? '',
+    cfAccessClientSecret: connection.cfAccessClientSecret ?? '',
+    location: previous?.location ?? null,
     locationCheckedAt: previous?.locationCheckedAt,
     system: previous?.host === connection.host ? previous.system ?? null : null,
   };
@@ -118,7 +130,7 @@ export async function hostsRoute(request: Request, env: Env, accountId: string, 
     }
     previous = await decryptHost<HostPayload>(previousRow.encrypted_payload, env.ENCRYPTION_KEY, accountId, id);
     if (action === 'credentials' && request.method === 'POST') {
-      return json({ password: previous.password, privateKey: previous.privateKey });
+      return json({ password: previous.password, privateKey: previous.privateKey, cfAccessClientSecret: previous.cfAccessClientSecret });
     }
     if (action === 'location' && request.method === 'POST') {
       await refreshLocation(previous);

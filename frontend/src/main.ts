@@ -57,6 +57,9 @@ interface ConnectionConfig {
   rows: number;
   term: string;
   expectedFingerprint?: string;
+  cfTunnel?: boolean;
+  cfAccessClientId?: string;
+  cfAccessClientSecret?: string;
 }
 
 interface ServerMessage {
@@ -269,6 +272,7 @@ const ui = {
   termType: element<HTMLSelectElement>('term-type'),
   encoding: element<HTMLSelectElement>('encoding'),
   fingerprint: element<HTMLInputElement>('fingerprint'),
+  cfTunnel: element<HTMLSelectElement>('cf-tunnel'),
   formError: element<HTMLElement>('form-error'),
   connect: element<HTMLButtonElement>('connect-button'),
   shareLink: element<HTMLButtonElement>('share-link'),
@@ -416,9 +420,12 @@ let fileTree: FileTree;
 let processManager: ProcessManager;
 let terminalTools: TerminalToolsController | undefined;
 let sshReconnectManager: WebSocketReconnectManager | null = null;
+let currentCfAccessClientId = '';
+let currentCfAccessClientSecret = '';
 let reconnectParams: {
   host: string; port: number; username: string; authMethod: string;
   password?: string; privateKey?: string; pinnedKey?: string;
+  cfTunnel?: boolean; cfAccessClientId?: string; cfAccessClientSecret?: string;
   term: string; encoding: string;
 } | null = null;
 
@@ -794,6 +801,8 @@ function clearPrivateKeyFields(): void {
 function clearCredentials(): void {
   resetPasswordField();
   clearPrivateKeyFields();
+  currentCfAccessClientId = '';
+  currentCfAccessClientSecret = '';
 }
 
 // A stale async history-password decrypt must never overwrite the form. The
@@ -845,10 +854,13 @@ function readProfileFromForm(password: string): Promise<SavedProfile> {
     termType: ui.termType.value,
     encoding: ui.encoding.value,
     fingerprint: ui.fingerprint.value.trim(),
+    cfTunnel: ui.cfTunnel.value === 'true',
+    cfAccessClientId: currentCfAccessClientId || existing?.cfAccessClientId || '',
     updatedAt: Date.now(),
   };
   if (profile.authMethod === 'password') profile.password = password;
   else profile.privateKey = ui.privateKey.value;
+  if (currentCfAccessClientSecret) profile.cfAccessClientSecret = currentCfAccessClientSecret;
   return Promise.resolve(profile);
 }
 
@@ -899,8 +911,9 @@ async function applyProfile(profile: SavedProfile): Promise<void> {
   ui.termType.value = profile.termType;
   ui.encoding.value = profile.encoding;
   ui.fingerprint.value = profile.fingerprint || hostKeys[targetKey(profile.host, profile.port, profile.username)] || '';
+  ui.cfTunnel.value = profile.cfTunnel ? 'true' : 'false';
+  currentCfAccessClientId = profile.cfAccessClientId ?? '';
   setAuthMethod(profile.authMethod);
-  passwordDirty = false;
   historyPasswordLoading = true;
   setState(connectionState);
   renderProfiles();
@@ -923,6 +936,7 @@ async function applyProfile(profile: SavedProfile): Promise<void> {
   if (selectionUnchanged) {
     ui.password.value = credentials.password ?? '';
     ui.privateKey.value = credentials.privateKey ?? '';
+    currentCfAccessClientSecret = credentials.cfAccessClientSecret ?? '';
   }
   setState(connectionState);
 }
@@ -938,6 +952,7 @@ function clearForm(): void {
   ui.termType.value = 'xterm-256color';
   ui.encoding.value = 'utf-8';
   ui.fingerprint.value = '';
+  ui.cfTunnel.value = 'false';
   ui.formError.hidden = true;
   currentFormError = null;
   setAuthMethod('password');
@@ -1579,6 +1594,11 @@ function createSshReconnectFactory(): (attempt: number) => Promise<WebSocket> {
       if (params.authMethod === 'password') config.password = params.password;
       else config.privateKey = params.privateKey;
       if (params.pinnedKey) config.expectedFingerprint = params.pinnedKey;
+      if (params.cfTunnel) {
+        config.cfTunnel = true;
+        if (params.cfAccessClientId) config.cfAccessClientId = params.cfAccessClientId;
+        if (params.cfAccessClientSecret) config.cfAccessClientSecret = params.cfAccessClientSecret;
+      }
 
       ws.send(JSON.stringify(config));
       updateConnectionStatus(localized('正在打开 TCP 连接...', 'Opening TCP connection...'));
@@ -1710,11 +1730,16 @@ async function connect(): Promise<void> {
     activeSocket.binaryType = 'arraybuffer';
 
     // Persist connection parameters so the reconnect factory can reuse them.
-    reconnectParams = { host, port, username, authMethod: method, term, encoding: ui.encoding.value };
+    const isTunnel = ui.cfTunnel.value === 'true';
+    reconnectParams = {
+      host, port, username, authMethod: method, term, encoding: ui.encoding.value,
+      cfTunnel: isTunnel,
+      cfAccessClientId: isTunnel && currentCfAccessClientId ? currentCfAccessClientId : undefined,
+      cfAccessClientSecret: isTunnel && currentCfAccessClientSecret ? currentCfAccessClientSecret : undefined,
+    };
     if (method === 'password') reconnectParams.password = password;
     else reconnectParams.privateKey = privateKey;
     if (pinnedKey) reconnectParams.pinnedKey = pinnedKey;
-
     // Set up (or replace) the SSH reconnect manager.
     sshReconnectManager?.reset();
     sshReconnectManager = new WebSocketReconnectManager({
@@ -1744,8 +1769,15 @@ async function connect(): Promise<void> {
       if (method === 'password') config.password = password;
       else config.privateKey = privateKey;
       if (pinnedKey) config.expectedFingerprint = pinnedKey;
+      if (isTunnel) {
+        config.cfTunnel = true;
+        if (currentCfAccessClientId) config.cfAccessClientId = currentCfAccessClientId;
+        if (currentCfAccessClientSecret) config.cfAccessClientSecret = currentCfAccessClientSecret;
+      }
       activeSocket.send(JSON.stringify(config));
-      updateConnectionStatus(localized('正在打开 TCP 连接...', 'Opening TCP connection...'));
+      updateConnectionStatus(isTunnel
+        ? localized('正在打开 Cloudflare Tunnel 连接...', 'Opening Cloudflare Tunnel connection...')
+        : localized('正在打开 TCP 连接...', 'Opening TCP connection...'));
       event(bilingual('WebSocket 已建立，正在打开 SSH 传输。', 'WebSocket established; opening SSH transport.'), 'transport');
     }, { once: true });
     activeSocket.addEventListener('message', (socketEvent) => {

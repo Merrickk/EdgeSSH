@@ -315,6 +315,7 @@ export class SSHSession {
     this.pendingHostConfirmation = null;
     this.config.password = undefined;
     this.config.privateKey = undefined;
+    this.config.cfAccessClientSecret = undefined;
     try { this.writer?.releaseLock(); } catch { /* already released */ }
     this.writer = null;
     try { this.socket.close(); } catch { /* already closed */ }

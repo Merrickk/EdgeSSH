@@ -349,12 +349,19 @@ export class ForwardPage {
       this.socket = socket;
       socket.addEventListener('open', () => {
         if (generation !== this.generation) return;
+        const { password, privateKey, cfAccessClientSecret } = credentials;
         socket.send(JSON.stringify({
           type: 'connect', mode: 'forward', host: host.host, port: host.port,
-          username: host.username, authMethod: host.authMethod, ...credentials,
+          username: host.username, authMethod: host.authMethod,
+          ...(host.authMethod === 'password' ? { password } : { privateKey }),
           ...(host.fingerprint ? { expectedFingerprint: host.fingerprint } : {}),
+          ...(host.cfTunnel ? {
+            cfTunnel: true,
+            ...(host.cfAccessClientId ? { cfAccessClientId: host.cfAccessClientId } : {}),
+            ...(cfAccessClientSecret ? { cfAccessClientSecret } : {}),
+          } : {}),
         }));
-        credentials.password = undefined; credentials.privateKey = undefined;
+        credentials.password = undefined; credentials.privateKey = undefined; credentials.cfAccessClientSecret = undefined;
         this.message('正在连接 SSH，首次连接请核对主机指纹…');
       });
       socket.addEventListener('message', (event) => {
