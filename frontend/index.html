@@ -454,6 +454,21 @@
                     <svg class="dock-tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.5h9l4 4V21H6a2 2 0 0 1-2-2V4.5a2 2 0 0 1 2-2Z" /><path d="M15 2.5V7h4M8 11h7M8 15h7" /></svg>
                     <span class="button-label" data-i18n-zh="会话日志" data-i18n-en="Session log">会话日志</span>
                   </button>
+                  <button
+                    id="dock-collapse"
+                    class="dock-tab dock-tab-collapse"
+                    type="button"
+                    aria-label="收起面板"
+                    data-i18n-aria-label-zh="收起面板"
+                    data-i18n-aria-label-en="Collapse panel"
+                    title="收起面板并还原终端 (Esc)"
+                    data-i18n-title-zh="收起面板并还原终端 (Esc)"
+                    data-i18n-title-en="Collapse panel and restore terminal (Esc)"
+                    hidden
+                  >
+                    <svg class="dock-tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+                    <span class="button-label" data-i18n-zh="收起" data-i18n-en="Collapse">收起</span>
+                  </button>
                 </div>
               </div>
 
@@ -556,7 +571,19 @@
                   <span><span data-i18n-zh="最后更新" data-i18n-en="Last update">最后更新</span> <strong id="process-updated">--</strong></span>
                 </div>
               </section>
-              <div id="event-log" class="event-log" role="tabpanel" aria-labelledby="event-toggle" tabindex="0" hidden aria-live="polite"></div>
+              <section id="event-log-container" class="event-log-container" role="tabpanel" aria-labelledby="event-toggle" tabindex="0" hidden>
+                <header class="event-log-header">
+                  <div class="event-log-header-title">
+                    <svg class="dock-tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.5h9l4 4V21H6a2 2 0 0 1-2-2V4.5a2 2 0 0 1 2-2Z" /><path d="M15 2.5V7h4M8 11h7M8 15h7" /></svg>
+                    <strong data-i18n-zh="会话事件日志" data-i18n-en="Session Event Log">会话事件日志</strong>
+                  </div>
+                  <div class="event-log-header-actions">
+                    <button id="event-log-clear" class="event-log-btn" type="button" data-i18n-zh="清空" data-i18n-en="Clear">清空</button>
+                    <button id="event-log-close" class="event-log-btn is-close" type="button" aria-label="收起日志" data-i18n-aria-label-zh="收起日志" data-i18n-aria-label-en="Collapse log" data-i18n-zh="✕ 收起日志" data-i18n-en="✕ Collapse">✕ 收起日志</button>
+                  </div>
+                </header>
+                <div id="event-log" class="event-log" aria-live="polite"></div>
+              </section>
             </div>
           </section>
         </main>

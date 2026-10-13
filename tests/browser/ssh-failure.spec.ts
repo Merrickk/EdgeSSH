@@ -58,4 +58,19 @@ test('initial SSH connection failure before ready never triggers auto-reconnect 
   await expect(page.locator('body')).toHaveAttribute('data-view', 'workspace');
   await expect(page.locator('#event-log')).toBeVisible();
   await expect(page.locator('#event-log')).toContainText('Cloudflare Tunnel WebSocket handshake failed (HTTP 502)');
+  await expect(page.locator('#dock-collapse')).toBeVisible();
+  await expect(page.locator('#event-log-close')).toBeVisible();
+  // Dismiss the connection drawer opened on error before interacting with the workspace dock
+  await page.keyboard.press('Escape');
+  // Verify user can collapse event log and restore terminal space via close button
+  await page.locator('#event-log-close').click();
+  await expect(page.locator('#event-log-container')).toBeHidden();
+  await expect(page.locator('#dock-collapse')).toBeHidden();
+  await expect(page.locator('.terminal-card')).not.toHaveClass(/workspace-panel-open/);
+  // Verify user can open again and collapse via Escape key
+  await page.locator('#event-toggle').click();
+  await expect(page.locator('#event-log-container')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#event-log-container')).toBeHidden();
+  await expect(page.locator('.terminal-card')).not.toHaveClass(/workspace-panel-open/);
 });

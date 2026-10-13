@@ -308,6 +308,10 @@ const ui = {
   processManagerTab: element<HTMLButtonElement>('process-manager-tab'),
   processManagerPanel: element<HTMLElement>('process-manager-panel'),
   eventToggle: element<HTMLButtonElement>('event-toggle'),
+  dockCollapse: element<HTMLButtonElement>('dock-collapse'),
+  eventLogContainer: element<HTMLElement>('event-log-container'),
+  eventLogClear: element<HTMLButtonElement>('event-log-clear'),
+  eventLogClose: element<HTMLButtonElement>('event-log-close'),
   eventLog: element<HTMLElement>('event-log'),
   toastRegion: element<HTMLElement>('toast-region'),
   hostKeyDialog: element<HTMLDialogElement>('host-key-dialog'),
@@ -1271,6 +1275,9 @@ function markReady(message = bilingual('交互式 Shell 已就绪', 'Interactive
   invalidateHistoryPasswordLoad();
   setState('connected');
   setPanelOpen(false);
+  if (activeWorkspaceTab === 'log') {
+    setWorkspaceTab(null);
+  }
   if (!sshReconnectManager && socket && reconnectParams) {
     sshReconnectManager = new WebSocketReconnectManager({
       id: 'SSH',
@@ -1333,7 +1340,8 @@ function setWorkspaceTab(tab: WorkspaceTab | null, focus = false, rovingTab = ta
   ui.terminalCard.classList.toggle('workspace-panel-open', tab !== null);
   ui.fileManagerPanel.hidden = !filesActive;
   ui.processManagerPanel.hidden = !processesActive;
-  ui.eventLog.hidden = !logActive;
+  ui.eventLogContainer.hidden = !logActive;
+  ui.dockCollapse.hidden = tab === null;
   ui.fileManagerTab.setAttribute('aria-selected', String(filesActive));
   ui.processManagerTab.setAttribute('aria-selected', String(processesActive));
   ui.eventToggle.setAttribute('aria-selected', String(logActive));
@@ -1491,7 +1499,7 @@ function handleServerMessage(message: ServerMessage): void {
     const failedSocket = socket;
     event(text, message.event ?? 'error', true);
     logTerminal(text, true);
-    logTerminal(bilingual('详细连接日志已在下方「事件日志」面板展开，也可点击左上角展开「连接面板」检查配置。', 'Detailed logs are open in the Event Log panel below.'), false);
+    logTerminal(bilingual('详细连接日志已在下方「事件日志」面板展开（可按 Esc 或点击「收起」还原终端）。', 'Detailed logs are open in Event Log below (press Esc or click Collapse to restore terminal).'), false);
     showFormError(text);
     toast(text, 'error');
     setWorkspaceTab('log');
@@ -2186,6 +2194,11 @@ ui.fileManagerTab.addEventListener('click', () => toggleWorkspaceTab('files'));
 ui.processManagerTab.addEventListener('click', () => toggleWorkspaceTab('processes'));
 ui.eventToggle.addEventListener('click', () => toggleWorkspaceTab('log'));
 ui.eventMessage.addEventListener('click', () => toggleWorkspaceTab('log'));
+ui.dockCollapse.addEventListener('click', () => setWorkspaceTab(null));
+ui.eventLogClose.addEventListener('click', () => setWorkspaceTab(null));
+ui.eventLogClear.addEventListener('click', () => {
+  ui.eventLog.replaceChildren();
+});
 document.querySelector<HTMLAnchorElement>('#app .brand')?.addEventListener('click', (clickEvent) => {
   if (document.body.dataset.view === 'workspace') {
     clickEvent.preventDefault();
@@ -2236,9 +2249,14 @@ window.addEventListener('beforeunload', () => {
 });
 
 document.addEventListener('keydown', (keyEvent) => {
-  if (keyEvent.key === 'Escape' && panelOpen && !ui.hostKeyDialog.open) {
+  if (keyEvent.key !== 'Escape' || ui.hostKeyDialog.open) return;
+  if (panelOpen) {
     setPanelOpen(false);
     ui.panelToggle.focus();
+  } else if (activeWorkspaceTab !== null) {
+    keyEvent.preventDefault();
+    setWorkspaceTab(null);
+    terminal.focus();
   }
 });
 
