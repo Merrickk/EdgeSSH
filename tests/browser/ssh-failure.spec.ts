@@ -50,7 +50,9 @@ test('initial SSH connection failure before ready never triggers auto-reconnect 
     });
   });
   await page.locator('#rail-overview').click();
-  await page.getByRole('button', { name: '连接', exact: true }).first().click();
+  const connectBtn = page.locator('.connect-host').first();
+  await expect(connectBtn).toBeVisible();
+  await connectBtn.click();
   await expect(page.locator('body')).toHaveAttribute('data-view', 'workspace');
   await expect(page.locator('#event-log')).toBeVisible();
   await expect(page.locator('#event-log')).toContainText('Cloudflare Tunnel WebSocket handshake failed (HTTP 502)');
