@@ -1674,12 +1674,16 @@ function handleSshReconnectLog(entry: ReconnectLogEntry): void {
     const reason = bilingual('SSH 认证或主机密钥确认失败，请检查后重试。', 'SSH authentication or host key approval failed; check the settings and try again.');
     showFormError(reason);
     event(reason, 'disconnect', true);
+    logTerminal(reason, true);
+    setWorkspaceTab('log');
     toast(reason, 'error');
     failActiveConnection(socket, 'SSH authentication failed', messageTranslation(reason));
   } else if (entry.event === 'give_up') {
     // Reconnect exhausted — perform full cleanup that was deferred.
     const reason = bilingual('SSH 重连失败，已达最大重试次数。', 'SSH reconnect failed; maximum retries reached.');
     event(reason, 'disconnect', true);
+    logTerminal(reason, true);
+    setWorkspaceTab('log');
     updateConnectionStatus(messageTranslation(reason));
     setState('error');
     toast(reason, 'error');
@@ -1840,10 +1844,11 @@ async function connect(): Promise<void> {
       currentExpectedFingerprint = '';
       currentRememberedFingerprint = '';
       const wasActive = connectionState === 'connected';
+      const isFatalAuth = closeEvent.code === SERVER_CLOSE_AUTH_DEFECT;
       const isUnexpected = closeEvent.code !== 1000 && closeEvent.code !== 1005;
 
-      if (wasActive && isUnexpected && sshReconnectManager) {
-        // 仅对已成功建立过的会话执行自动重连
+      if (wasActive && isUnexpected && !isFatalAuth && sshReconnectManager) {
+        // 仅对已成功建立过且非确定性认证失败的会话执行自动重连
         stopTimers();
         resetNetworkMetric();
         clearHostKeyPrompt();
