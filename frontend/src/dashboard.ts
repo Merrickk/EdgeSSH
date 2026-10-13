@@ -163,22 +163,44 @@ export class Dashboard {
         event.preventDefault(); this.get<HTMLInputElement>('#host-search').focus();
       }
     });
-    const back = document.createElement('button');
-    back.className = 'icon-button home-back'; back.textContent = '← 主机总览'; back.type = 'button';
-    back.addEventListener('click', () => {
-      if (!this.actions.files.confirmLeave()) return;
-      this.actions.leaveWorkspace(); this.show(); void this.refresh();
-    });
-    document.querySelector('#app .topbar-actions')!.prepend(back);
-    const files = document.createElement('button');
-    files.className = 'icon-button home-back'; files.textContent = '文件管理'; files.type = 'button';
-    files.addEventListener('click', () => this.showFiles());
-    document.querySelector('#app .topbar-actions')!.prepend(files);
-    const forwarding = document.createElement('button');
-    forwarding.className = 'icon-button home-back'; forwarding.textContent = '端口转发'; forwarding.type = 'button';
-    forwarding.addEventListener('click', () => this.showForwarding());
-    document.querySelector('#app .topbar-actions')!.append(forwarding);
+    this.setupWorkspaceNav();
     this.show();
+  }
+
+  private setupWorkspaceNav(): void {
+    const topbar = document.querySelector('#app .topbar');
+    const topbarActions = document.querySelector('#app .topbar-actions');
+    if (!topbar || !topbarActions) return;
+
+    const nav = document.createElement('nav');
+    nav.className = 'workspace-topbar-nav';
+    nav.setAttribute('aria-label', '工作台快捷导航');
+
+    const backBtn = document.getElementById('back-to-dashboard') as HTMLButtonElement | null;
+    if (backBtn) {
+      backBtn.className = 'ws-nav-item ws-nav-back';
+      backBtn.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg><span>主机总览</span>`;
+      backBtn.addEventListener('click', () => this.show());
+      nav.append(backBtn);
+    }
+
+    const makeNavBtn = (id: string, svgIcon: string, label: string, onClick: () => void): HTMLButtonElement => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.id = id;
+      btn.className = 'ws-nav-item';
+      btn.innerHTML = `${svgIcon}<span>${label}</span>`;
+      btn.addEventListener('click', onClick);
+      return btn;
+    };
+
+    nav.append(
+      makeNavBtn('open-files-from-workspace', icon('folder'), '文件管理', () => this.showFiles()),
+      makeNavBtn('open-snippets-from-workspace', icon('snippets'), '代码片段', () => this.showSnippets()),
+      makeNavBtn('open-forwarding-from-workspace', icon('forward'), '端口转发', () => this.showForwarding())
+    );
+
+    topbar.insertBefore(nav, topbarActions);
   }
 
   private get<T extends HTMLElement = HTMLElement>(selector: string): T { return this.root.querySelector<T>(selector)!; }
