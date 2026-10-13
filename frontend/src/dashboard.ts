@@ -169,15 +169,13 @@ export class Dashboard {
       if (!this.actions.files.confirmLeave()) return;
       this.actions.leaveWorkspace(); this.show(); void this.refresh();
     });
-    document.querySelector('#app .topbar-actions')!.prepend(back);
     const files = document.createElement('button');
     files.className = 'icon-button home-back'; files.textContent = '文件管理'; files.type = 'button';
     files.addEventListener('click', () => this.showFiles());
-    document.querySelector('#app .topbar-actions')!.prepend(files);
     const forwarding = document.createElement('button');
     forwarding.className = 'icon-button home-back'; forwarding.textContent = '端口转发'; forwarding.type = 'button';
     forwarding.addEventListener('click', () => this.showForwarding());
-    document.querySelector('#app .topbar-actions')!.append(forwarding);
+    document.querySelector('#app .topbar-actions')!.prepend(back, files, forwarding);
     this.show();
   }
 
