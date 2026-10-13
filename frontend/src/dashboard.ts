@@ -166,8 +166,7 @@ export class Dashboard {
     const back = document.createElement('button');
     back.className = 'icon-button home-back'; back.textContent = '← 主机总览'; back.type = 'button';
     back.addEventListener('click', () => {
-      if (!this.actions.files.confirmLeave()) return;
-      this.actions.leaveWorkspace(); this.show(); void this.refresh();
+      this.returnHome();
     });
     const files = document.createElement('button');
     files.className = 'icon-button home-back'; files.textContent = '文件管理'; files.type = 'button';
@@ -235,6 +234,13 @@ export class Dashboard {
     document.getElementById('app')!.hidden = true;
     document.body.dataset.view = 'dashboard';
     this.globe?.setActive(!this.paused);
+  }
+
+  returnHome(): void {
+    if (!this.actions.files.confirmLeave()) return;
+    this.actions.leaveWorkspace();
+    this.show();
+    void this.refresh();
   }
 
   openWorkspace(): void {
@@ -409,7 +415,9 @@ export class Dashboard {
     if (this.busy) return;
     this.busy = true; this.root.setAttribute('aria-busy', 'true');
     this.notice(`正在读取 ${host.name} 的连接凭据…`);
-    try { await this.actions.connect(host); this.openWorkspace(); this.get('#home-notice').hidden = true; }
+    this.openWorkspace();
+    this.get('#home-notice').hidden = true;
+    try { await this.actions.connect(host); }
     catch (error) { this.notice(error instanceof Error ? error.message : '连接准备失败。'); }
     finally { this.busy = false; this.root.removeAttribute('aria-busy'); }
   }

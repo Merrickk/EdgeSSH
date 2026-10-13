@@ -451,7 +451,7 @@ export class SSHSessionDO implements DurableObject {
   }
 
   private reject(ws: WebSocket, message: string): void {
-    try { ws.send(JSON.stringify({ type: 'error', event: 'connection_failed', message })); } catch { /* already closed */ }
+    try { ws.send(JSON.stringify({ type: 'error', event: 'connection_failed', message, retryable: false })); } catch { /* already closed */ }
     this.cleanup(ws);
     try { ws.close(1011, 'SSH connection failed'); } catch { /* already closed */ }
   }

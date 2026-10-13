@@ -37,3 +37,23 @@ for (const signal of ['error-message', 'close-code', 'reconnect-close-code']) {
     await expect(page.locator('#files-connection-state')).toHaveText('SSH 已连接');
   });
 }
+
+test('initial SSH connection failure before ready never triggers auto-reconnect and reveals event log in workspace', async ({ page }) => {
+  await fileFixture(page);
+  const sockets: WebSocketRoute[] = [];
+  await page.routeWebSocket('**/api/ssh?*', (ws) => {
+    sockets.push(ws);
+    ws.onMessage((raw) => {
+      if (typeof raw !== 'string' || JSON.parse(raw).type !== 'connect') return;
+      ws.send(JSON.stringify({ type: 'error', message: 'Cloudflare Tunnel WebSocket handshake failed (HTTP 502)' }));
+      ws.close({ code: 1011, reason: 'SSH session failed' });
+    });
+  });
+  await page.locator('#rail-overview').click();
+  await page.getByRole('button', { name: '连接', exact: true }).first().click();
+  await expect(page.locator('body')).toHaveAttribute('data-view', 'workspace');
+  await expect(page.locator('#event-log')).toBeVisible();
+  await expect(page.locator('#event-log')).toContainText('Cloudflare Tunnel WebSocket handshake failed (HTTP 502)');
+  await page.waitForTimeout(1400);
+  expect(sockets.length).toBe(1);
+});

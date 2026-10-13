@@ -1641,6 +1641,22 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+#event-message:hover {
+  text-decoration: underline;
+}
+
+.event-bar.has-error {
+  background: rgba(244, 63, 94, 0.12);
+  border-bottom-color: rgba(244, 63, 94, 0.36);
+}
+
+.event-bar.has-error #event-message {
+  color: #ff6b6b;
+  font-weight: 600;
 }
 
 .workspace-dock {
@@ -3416,6 +3432,17 @@ body[data-view='workspace'] .terminal-actions .toolbar-button:hover {
   background: var(--home-accent-soft, #fff0e9);
   color: var(--home-accent, #f4511e);
 }
+body[data-view='workspace'] .terminal-actions .toolbar-button.is-danger {
+  border-color: #fecdd3;
+  background: #fff1f2;
+  color: #e11d48;
+}
+
+body[data-view='workspace'] .terminal-actions .toolbar-button.is-danger:hover {
+  border-color: #e11d48;
+  background: #ffe4e6;
+  color: #be123c;
+}
 
 /* Terminal Stage (Keep dark inside the light workbench card for crisp contrast) */
 body[data-view='workspace'] .terminal-stage {
@@ -3563,6 +3590,14 @@ body[data-view='workspace'] .event-bar {
   background: #f8fafc;
   border-bottom: 1px solid var(--home-line, #e9ecf1);
   color: var(--home-muted, #667085);
+}
+body[data-view='workspace'] .event-bar.has-error {
+  background: #fff1f2;
+  border-bottom-color: #fecdd3;
+}
+
+body[data-view='workspace'] .event-bar.has-error #event-message {
+  color: #e11d48;
 }
 
 body[data-view='workspace'] .workspace-dock {

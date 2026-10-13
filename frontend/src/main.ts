@@ -295,6 +295,8 @@ const ui = {
   terminalElement: element<HTMLElement>('terminal'),
   terminalEmpty: element<HTMLElement>('terminal-empty'),
   emptyConnect: element<HTMLButtonElement>('empty-connect'),
+  disconnectTerminal: element<HTMLButtonElement>('disconnect-terminal'),
+  disconnectTerminalLabel: element<HTMLElement>('disconnect-terminal-label'),
   clearTerminal: element<HTMLButtonElement>('clear-terminal'),
   fullscreenTerminal: element<HTMLButtonElement>('fullscreen-terminal'),
   eventMessage: element<HTMLElement>('event-message'),
@@ -1148,13 +1150,38 @@ function setState(state: ConnectionState, label?: string): void {
   ui.connect.querySelector<HTMLElement>('span:last-child')!.textContent = controlLabel;
   ui.connect.setAttribute('aria-label', controlLabel);
   ui.connect.title = currentSessionId || controlLabel;
+  if (state === 'connecting') {
+    ui.disconnectTerminal.hidden = false;
+    ui.disconnectTerminal.classList.add('is-danger');
+    const cancelText = bilingual('取消连接', 'Cancel');
+    ui.disconnectTerminalLabel.textContent = cancelText;
+    ui.disconnectTerminal.setAttribute('aria-label', cancelText);
+  } else if (state === 'connected') {
+    ui.disconnectTerminal.hidden = false;
+    ui.disconnectTerminal.classList.remove('is-danger');
+    const discText = bilingual('断开连接', 'Disconnect');
+    ui.disconnectTerminalLabel.textContent = discText;
+    ui.disconnectTerminal.setAttribute('aria-label', discText);
+  } else {
+    ui.disconnectTerminal.hidden = true;
+    ui.disconnectTerminal.classList.remove('is-danger');
+  }
   terminalTools?.setConnected(state === 'connected');
+}
+
+function logTerminal(message: string, isError = false): void {
+  const time = new Date().toLocaleTimeString([], { hour12: false });
+  const tag = isError
+    ? `\x1b[31;1m[${bilingual('错误', 'ERROR')}]\x1b[0m`
+    : `\x1b[36m[${bilingual('诊断', 'INFO')}]\x1b[0m`;
+  terminal.writeln(`\x1b[90m${time}\x1b[0m ${tag} ${message}`);
 }
 
 function event(message: string, category = 'session', error = false, alternate?: string): void {
   const eventTranslation = messageTranslation(message, alternate);
   currentEventMessage = eventTranslation;
   ui.eventMessage.textContent = localize(currentEventMessage);
+  ui.eventMessage.parentElement?.classList.toggle('has-error', error);
   const line = document.createElement('div');
   line.className = `event-line${error ? ' error' : ''}`;
   line.dataset.category = category;
@@ -1244,6 +1271,15 @@ function markReady(message = bilingual('交互式 Shell 已就绪', 'Interactive
   invalidateHistoryPasswordLoad();
   setState('connected');
   setPanelOpen(false);
+  if (!sshReconnectManager && socket && reconnectParams) {
+    sshReconnectManager = new WebSocketReconnectManager({
+      id: 'SSH',
+      onConnect: createSshReconnectFactory(),
+      onLog: handleSshReconnectLog,
+      nonRetryableCloseCodes: [SERVER_CLOSE_AUTH_DEFECT],
+    });
+    sshReconnectManager.attach(socket);
+  }
   profileSaveTask = saveConnectedProfile().catch(() => {
     toast(bilingual('连接成功，但无法更新历史记录。', 'Connected, but the history could not be updated.'), 'error');
   });
@@ -1454,24 +1490,27 @@ function handleServerMessage(message: ServerMessage): void {
     const text = bilingualServerMessage(message.message, message.event, 'The SSH session failed.', 'SSH 错误');
     const failedSocket = socket;
     event(text, message.event ?? 'error', true);
+    logTerminal(text, true);
+    logTerminal(bilingual('详细连接日志已在下方「事件日志」面板展开，也可点击左上角展开「连接面板」检查配置。', 'Detailed logs are open in the Event Log panel below.'), false);
     showFormError(text);
     toast(text, 'error');
-    if (message.retryable === false) {
-      // 客户端随后以 4000 关闭会遮住服务端关闭码，先停止重连才能避免重试旧凭据。
-      sshReconnectManager?.reset();
-      sshReconnectManager = null;
-      reconnectParams = null;
-    }
+    setWorkspaceTab('log');
+    sshReconnectManager?.reset();
+    sshReconnectManager = null;
+    reconnectParams = null;
     failActiveConnection(failedSocket, 'SSH session failed', messageTranslation(text));
     return;
   }
   if (type === 'debug') {
-    event(bilingualServerMessage(message.message, message.event, 'Debug event'), 'debug');
+    const debugText = bilingualServerMessage(message.message, message.event, 'Debug event');
+    event(debugText, 'debug');
+    if (connectionState !== 'connected') logTerminal(debugText);
     return;
   }
   if (type === 'status') {
     const text = bilingualServerMessage(message.message, message.event, 'SSH handshake in progress');
     event(text, message.event ?? 'status');
+    if (connectionState !== 'connected') logTerminal(text);
     updateConnectionStatus(messageTranslation(text));
     if (message.event === 'shell_ready' || message.event === 'ready') markReady(text);
   }
@@ -1519,6 +1558,9 @@ function failActiveConnection(activeSocket: WebSocket | null, closeReason: strin
   pendingHistory = null;
   authorizationAbort?.abort();
   authorizationAbort = null;
+  sshReconnectManager?.reset();
+  sshReconnectManager = null;
+  reconnectParams = null;
   currentExpectedFingerprint = '';
   currentRememberedFingerprint = '';
   stopTimers();
@@ -1703,8 +1745,9 @@ async function connect(): Promise<void> {
   ui.sessionTitle.textContent = currentTargetLabel;
   updateConnectionStatus(localized('正在授权 Worker 会话...', 'Authorizing Worker session...'));
   ui.metricHostKey.textContent = '--';
-  event(bilingual(`正在连接 ${currentTargetLabel}`, `Starting ${currentTargetLabel}`), 'connect');
-
+  const startMsg = bilingual(`正在连接 ${currentTargetLabel}`, `Starting ${currentTargetLabel}`);
+  event(startMsg, 'connect');
+  logTerminal(startMsg);
   try {
     const password = ui.password.value;
     const privateKey = ui.privateKey.value.trim();
@@ -1740,16 +1783,9 @@ async function connect(): Promise<void> {
     if (method === 'password') reconnectParams.password = password;
     else reconnectParams.privateKey = privateKey;
     if (pinnedKey) reconnectParams.pinnedKey = pinnedKey;
-    // Set up (or replace) the SSH reconnect manager.
+    // 仅在会话真正建立成功（markReady）后再挂载自动重连，防止首次连接配置有误时无限重连循环
     sshReconnectManager?.reset();
-    sshReconnectManager = new WebSocketReconnectManager({
-      id: 'SSH',
-      onConnect: createSshReconnectFactory(),
-      onLog: handleSshReconnectLog,
-      nonRetryableCloseCodes: [SERVER_CLOSE_AUTH_DEFECT],
-    });
-    sshReconnectManager.attach(activeSocket);
-
+    sshReconnectManager = null;
     activeSocket.addEventListener('open', () => {
       if (socket !== activeSocket || generation !== connectGeneration) {
         activeSocket.close(1000, 'Connection attempt superseded');
@@ -1775,10 +1811,13 @@ async function connect(): Promise<void> {
         if (currentCfAccessClientSecret) config.cfAccessClientSecret = currentCfAccessClientSecret;
       }
       activeSocket.send(JSON.stringify(config));
-      updateConnectionStatus(isTunnel
+      const transportStatus = isTunnel
         ? localized('正在打开 Cloudflare Tunnel 连接...', 'Opening Cloudflare Tunnel connection...')
-        : localized('正在打开 TCP 连接...', 'Opening TCP connection...'));
-      event(bilingual('WebSocket 已建立，正在打开 SSH 传输。', 'WebSocket established; opening SSH transport.'), 'transport');
+        : localized('正在打开 TCP 连接...', 'Opening TCP connection...');
+      updateConnectionStatus(transportStatus);
+      const transportEvent = bilingual('WebSocket 已建立，正在打开 SSH 传输。', 'WebSocket established; opening SSH transport.');
+      event(transportEvent, 'transport');
+      logTerminal(`${localize(transportStatus)} (${transportEvent})`);
     }, { once: true });
     activeSocket.addEventListener('message', (socketEvent) => {
       void handleSocketData(socketEvent.data as string | ArrayBuffer | Blob, activeSocket, generation);
@@ -1787,8 +1826,10 @@ async function connect(): Promise<void> {
       if (socket !== activeSocket) return;
       const message = localized('WebSocket 传输错误。', 'WebSocket transport error.');
       event(localize(message), 'transport', true);
+      logTerminal(localize(message), true);
       showFormError(localize(message));
       toast(localize(message), 'error');
+      setWorkspaceTab('log');
       failActiveConnection(activeSocket, 'WebSocket transport error', message);
     });
     activeSocket.addEventListener('close', (closeEvent) => {
@@ -1801,23 +1842,25 @@ async function connect(): Promise<void> {
       const wasActive = connectionState === 'connected';
       const isUnexpected = closeEvent.code !== 1000 && closeEvent.code !== 1005;
 
-      if (isUnexpected && sshReconnectManager) {
-        // The reconnect manager will attempt reconnection autonomously.
-        // Skip tearing down child connections — they each have their own
-        // reconnect logic that fires independently.
+      if (wasActive && isUnexpected && sshReconnectManager) {
+        // 仅对已成功建立过的会话执行自动重连
         stopTimers();
         resetNetworkMetric();
         clearHostKeyPrompt();
         invalidateHistoryPasswordLoad();
         const reason = bilingual('SSH 连接断开，正在重连…', 'SSH connection lost; reconnecting…');
         event(reason, 'disconnect', true);
+        logTerminal(reason, true);
         updateConnectionStatus(messageTranslation(reason));
         setState('connecting');
-        if (wasActive) toast(reason, 'error');
+        toast(reason, 'error');
         return;
       }
 
-      // Normal close or reconnect not available — full cleanup.
+      // 首次连接未成功或正常断开 —— 清理重连状态，不进行无限重连
+      sshReconnectManager?.reset();
+      sshReconnectManager = null;
+      reconnectParams = null;
       stopTimers();
       fileManager.reset();
       fileTree?.setReady(false);
@@ -1829,11 +1872,15 @@ async function connect(): Promise<void> {
         ? bilingualServerMessage(closeEvent.reason)
         : closeEvent.code === 1000
           ? bilingual('会话已关闭。', 'Session closed.')
-          : bilingual(`会话已关闭（${closeEvent.code}）。`, `Session closed (${closeEvent.code}).`);
+          : bilingual(`会话已关闭（代码 ${closeEvent.code}）。`, `Session closed (${closeEvent.code}).`);
       event(reason, 'disconnect', isUnexpected);
+      if (isUnexpected) {
+        logTerminal(reason, true);
+        setWorkspaceTab('log');
+      }
       updateConnectionStatus(messageTranslation(reason));
       setState(isUnexpected ? 'error' : 'idle');
-      if (wasActive) toast(reason, isUnexpected ? 'error' : 'info');
+      if (wasActive || isUnexpected) toast(reason, isUnexpected ? 'error' : 'info');
     });
   } catch (error) {
     if (authorizationAbort === abortController) authorizationAbort = null;
@@ -1848,6 +1895,8 @@ async function connect(): Promise<void> {
         : bilingualServerMessage(String(error), undefined, undefined, '连接失败');
     showFormError(message);
     event(message, 'authorization', true);
+    logTerminal(message, true);
+    setWorkspaceTab('log');
     toast(message, 'error');
     setState('error');
   }
@@ -2099,6 +2148,13 @@ ui.emptyConnect.addEventListener('click', () => {
   setPanelOpen(true);
   requestAnimationFrame(() => ui.host.focus());
 });
+ui.disconnectTerminal.addEventListener('click', () => {
+  if (connectionState === 'connecting' || connectionState === 'connected') {
+    disconnect(connectionState === 'connecting'
+      ? bilingual('连接已取消', 'Connection cancelled')
+      : bilingual('已由用户断开连接', 'Disconnected by user'));
+  }
+});
 ui.clearTerminal.addEventListener('click', () => terminal.clear());
 ui.fullscreenTerminal.addEventListener('click', async () => {
   if (document.fullscreenElement === ui.terminalCard) await document.exitFullscreen();
@@ -2124,6 +2180,13 @@ document.addEventListener('fullscreenchange', () => {
 ui.fileManagerTab.addEventListener('click', () => toggleWorkspaceTab('files'));
 ui.processManagerTab.addEventListener('click', () => toggleWorkspaceTab('processes'));
 ui.eventToggle.addEventListener('click', () => toggleWorkspaceTab('log'));
+ui.eventMessage.addEventListener('click', () => toggleWorkspaceTab('log'));
+document.querySelector<HTMLAnchorElement>('#app .brand')?.addEventListener('click', (clickEvent) => {
+  if (document.body.dataset.view === 'workspace') {
+    clickEvent.preventDefault();
+    dashboard?.returnHome();
+  }
+});
 ui.fileManagerTab.addEventListener('keydown', handleWorkspaceTabKey);
 ui.processManagerTab.addEventListener('keydown', handleWorkspaceTabKey);
 ui.eventToggle.addEventListener('keydown', handleWorkspaceTabKey);
