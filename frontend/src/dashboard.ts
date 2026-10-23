@@ -6,10 +6,6 @@ import { ForwardPage } from './forward-page';
 import type { ContainerPage } from './container-page';
 import { countryFlag } from './flags';
 import { systemIcon } from './os-icons';
-import {
-  readHostSnapshot, formatBytes, formatRate,
-  type HostSnapshot, type MetricKey, type MetricUsage,
-} from './host-metrics';
 import './dashboard.css';
 
 interface DashboardActions {
@@ -35,20 +31,6 @@ const icons = {
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
 };
 function icon(name: keyof typeof icons): string { return `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[name]}</svg>`; }
-
-const METRIC_LABELS: Record<MetricKey, string> = {
-  cpu: 'CPU', memory: '内存', disk: '磁盘', network: '网络',
-};
-
-/** 指标条下方的副标题：用量/总量，网络显示上下行速率。 */
-function formatMetricDetail(key: MetricKey, usage: MetricUsage): string {
-  if (key === 'network') {
-    const rate = usage.rate;
-    return rate ? `↑ ${formatRate(rate.up)} · ↓ ${formatRate(rate.down)}` : '—';
-  }
-  if (!usage.total) return formatBytes(usage.used);
-  return `${formatBytes(usage.used)} / ${formatBytes(usage.total)}`;
-}
 
 export class Dashboard {
   readonly root = document.createElement('section');
@@ -436,32 +418,12 @@ export class Dashboard {
           try { await removeHost(host.id); await this.refresh(); }
           catch (error) { this.notice(error instanceof Error ? error.message : '删除失败。'); remove.disabled = false; }
         });
-        // komari 风格：卡片底部一条实时/缓存指标带，连接过的主机才有数据。
-        const metrics = document.createElement('div'); metrics.className = 'host-metrics';
-        const snapshot = readHostSnapshot(host.id);
-        for (const key of ['cpu', 'memory', 'disk', 'network'] as const) {
-          const metric = document.createElement('div'); metric.className = 'host-metric';
-          const head = document.createElement('div'); head.className = 'host-metric-head';
-          const label = document.createElement('span'); label.textContent = METRIC_LABELS[key];
-          const value = document.createElement('strong');
-          const usage = snapshot?.[key];
-          value.textContent = usage ? `${Math.round(usage.percent)}%` : '—';
-          head.append(label, value);
-          const bar = document.createElement('div'); bar.className = 'host-metric-bar';
-          const fill = document.createElement('i');
-          fill.style.width = usage ? `${Math.min(100, Math.max(2, usage.percent))}%` : '0%';
-          fill.dataset.metric = key;
-          bar.append(fill);
-          const detail = document.createElement('small');
-          detail.textContent = usage ? formatMetricDetail(key, usage) : '连接后采集';
-          metric.append(head, bar, detail);
-          metrics.append(metric);
-        }
+        // 没有常驻探针，指标带只会长期显示占位；保留系统信息与位置即可。
         const body = document.createElement('div'); body.className = 'host-card-body';
         body.append(symbol, copy, location);
         const actions = document.createElement('div'); actions.className = 'host-card-actions';
         actions.append(connect, edit, remove);
-        row.append(body, metrics, actions); list.append(row);
+        row.append(body, actions); list.append(row);
       }
     }
   }

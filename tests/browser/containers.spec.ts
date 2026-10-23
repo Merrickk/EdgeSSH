@@ -86,7 +86,8 @@ test('总览标签只剩一个，并新增容器标签', async ({ page }) => {
   await expect(page.locator('#rail-overview')).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('#rail-files')).toHaveText('文件');
   await expect(page.locator('#rail-containers')).toHaveText('容器');
-  // 总览页仍渲染 komari 风格主机卡片。
+  // 总览页仍渲染主机卡片；没有常驻探针，所以不再放长期占位的指标带。
   await expect(page.locator('.host-card').first()).toBeVisible();
-  await expect(page.locator('.host-card .host-metric-head').first()).toContainText('CPU');
+  await expect(page.locator('.host-card .host-metric')).toHaveCount(0);
+  await expect(page.locator('.host-card').first()).toContainText('Tokyo production');
 });

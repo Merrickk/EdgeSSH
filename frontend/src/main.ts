@@ -15,7 +15,6 @@ import { FileTree } from './file-tree';
 import { ProcessManager, collectProcessManagerElements, type NetworkSample, type ProcessSnapshot } from './process-manager';
 import { ContainerManager, collectContainerManagerElements } from './container-manager';
 import { resetTerminalForConnection } from './terminal-session';
-import { writeHostSnapshot, type HostSnapshot } from './host-metrics';
 import { createTerminalTools, type TerminalToolsController } from './terminal-tools';
 import { WebSocketReconnectManager } from './ws-reconnect';
 import type { ReconnectLogEntry } from './ws-reconnect';
@@ -464,8 +463,6 @@ let reconnectParams: {
 const NET_SPARK_POINTS = 60;
 const netSpark = new Float32Array(NET_SPARK_POINTS);
 let netSparkIdx = 0;
-/** 最近一次网络采样换算出的上下行速率，供总览卡片快照使用。 */
-let latestNetworkRate: { up: number; down: number } | null = null;
 let netSparkFilled = 0;
 const netBaselines = new Map<string, { rx: number; tx: number; ts: number }>();
 let netIfaceList: string[] = [];
@@ -655,12 +652,10 @@ function updateNetworkMetric(samples: NetworkSample[] | null, timestamp: number)
   // `↑` = upload (tx), `↓` = download (rx) — match the toolbar arrow convention.
   ui.resourceNetworkRateUp.textContent = `↑ ${formatNetworkRate(txRate)}`;
   ui.resourceNetworkRateDown.textContent = `↓ ${formatNetworkRate(rxRate)}`;
-  latestNetworkRate = { up: txRate, down: rxRate };
   updateNetworkIfaceLabel();
 }
 
 function resetNetworkMetric(): void {
-  latestNetworkRate = null;
   // Idempotent: only touch the DOM / state if the block is currently visible
   // or still carries live state, so repeated resets (one per
   // processManager.reset() call site) are cheap.
@@ -724,8 +719,6 @@ processManager = new ProcessManager({
   onReconnect: (zh, en) => event(bilingual(zh, en), 'process'),
   onToast: (zh, en, kind) => toast(bilingual(zh, en), kind),
   onNetworkSample: (sample, timestamp) => updateNetworkMetric(sample, timestamp),
-  // 总览卡片用最近一次连接的快照充数；SSH 是按需连接，没有常驻探针。
-  onSnapshot: (snapshot) => recordHostSnapshot(snapshot),
 });
 
 containerManager = new ContainerManager({
@@ -736,20 +729,6 @@ containerManager = new ContainerManager({
   onToast: (zh, en, kind) => toast(bilingual(zh, en), kind),
 });
 
-/** 把进程监控快照折算成总览卡片指标并缓存。 */
-function recordHostSnapshot(snapshot: ProcessSnapshot): void {
-  const host = profiles.find((item) => passwordContext(item) === currentTargetKey);
-  if (!host) return;
-  const cpu = snapshot.metrics.cpuPercent;
-  const memory = snapshot.metrics.memory;
-  if (cpu === null && !memory) return;
-  const next: HostSnapshot = {};
-  if (cpu !== null) next.cpu = { percent: cpu, used: 0, total: 0 };
-  if (memory) next.memory = { percent: memory.percent, used: memory.usedBytes, total: memory.totalBytes };
-  const rate = latestNetworkRate;
-  if (rate) next.network = { percent: 0, used: 0, total: 0, rate };
-  writeHostSnapshot(host.id, next);
-}
 
 function terminalTheme(): Record<string, string> {
   return {
