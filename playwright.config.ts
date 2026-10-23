@@ -5,6 +5,9 @@ const ci = Boolean(process.env.CI);
 export default defineConfig({
   testDir: './tests/browser',
   fullyParallel: true,
+  // 文件管理相关用例共享同一个 SFTP 模拟通道，并行时上传完成的目录刷新
+  // 会因 dev server 冷启动而超时；限制单文件执行，保持确定性。
+  workers: process.env.CI ? 2 : 1,
   // GitHub runners give the suite two cores and a cold Vite dev server; the
   // shared file-manager tests then exceed the 30s default on occasional runs.
   timeout: ci ? 90_000 : 30_000,

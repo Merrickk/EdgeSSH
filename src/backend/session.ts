@@ -49,6 +49,10 @@ import { encodeString, readUint32, toBufferSource } from '../ssh/utils';
 import { parseTopSnapshot } from './top-parser';
 import { retainTrailingMarkerPrefix } from './process-framing';
 import { parseSystemProbe, SYSTEM_PROBE_COMMAND } from './system-info';
+import {
+  CONTAINER_MONITOR_COMMAND, CONTAINER_SNAPSHOT_MARKER, parseContainerFrame,
+  retainContainerMarkerPrefix, buildContainerActionCommand,
+} from './container-command';
 import { ForwardChannel } from '../forwarding/channel';
 
 type Cipher = SSHAESGCMCipher | SSHAESCTRCipher;
@@ -90,6 +94,23 @@ interface PendingProcessKillChannel {
   stderrBytes: number;
   finalized: boolean;
 }
+interface PendingContainerActionChannel {
+  readonly channelID: number;
+  readonly channel: SSHChannel;
+  readonly requestId: string;
+  readonly command: string;
+  timeout: ReturnType<typeof setTimeout> | null;
+  cancelled: boolean;
+  openConfirmed: boolean;
+  stdoutDecoder: TextDecoder;
+  stderrDecoder: TextDecoder;
+  stdout: string;
+  stderr: string;
+  stdoutBytes: number;
+  stderrBytes: number;
+  finalized: boolean;
+}
+
 interface PendingSystemProbeChannel {
   readonly channelID: number;
   readonly channel: SSHChannel;
@@ -112,6 +133,13 @@ const PROCESS_KILL_CHANNEL_OPEN_TIMEOUT_MS = 15_000;
 // output on success, but a hostile or buggy server could dump arbitrary data through the exec
 // channel; cap the bytes we keep per stream so one bad request cannot exhaust worker memory.
 const PROCESS_KILL_MAX_BUFFER_BYTES = 4 * 1024;
+// Container monitor: the resident `docker ps`/`docker stats` loop and the one-shot
+// action channels (start/stop/restart/rm/rmi/logs) share these caps.
+const CONTAINER_MAX_BUFFER_BYTES = 256 * 1024;
+const CONTAINER_ACTION_MAX_OUTPUT_BYTES = 32 * 1024;
+const CONTAINER_ACTION_COMMAND_MAX_BYTES = 512;
+const CONTAINER_ACTION_TIMEOUT_MS = 60_000;
+const CONTAINER_ACTION_CHANNEL_OPEN_TIMEOUT_MS = 15_000;
 const SYSTEM_PROBE_TIMEOUT_MS = 10_000;
 const SYSTEM_PROBE_MAX_BUFFER_BYTES = 16 * 1024;
 const PROCESS_SNAPSHOT_MARKER = '__CF_WEBSSH_TOP_SNAPSHOT__';
@@ -195,6 +223,16 @@ export class SSHSession {
   // Concurrent `kill -TERM <pid>` requests, keyed by local channel ID. Each request gets its
   // own exec channel so the top-monitor channel stays undisturbed.
   private readonly pendingProcessKillChannels = new Map<number, PendingProcessKillChannel>();
+  // ── Container monitor (docker) ──────────────────────────────────
+  private containerChannel: SSHChannel | null = null;
+  private containerWebSocket: WebSocket | null = null;
+  private containerAttachUrl = '';
+  private containerBuffer = '';
+  private containerDecoder = new TextDecoder();
+  private pendingContainerChannelOpen: PendingProcessChannelOpen | null = null;
+  private containerDockerMissing = false;
+  private containerStderr = '';
+  private readonly pendingContainerActionChannels = new Map<number, PendingContainerActionChannel>();
   private systemProbe: PendingSystemProbeChannel | null = null;
   private ignoreNextKexPacket = false;
   private inputQueue: Uint8Array[] = [];
@@ -764,6 +802,29 @@ export class SSHSession {
           await this.sendAuxiliaryChannelClose(channel);
           throw error;
         }
+      } else if (channel === this.containerChannel && this.containerWebSocket && !this.pendingContainerChannelOpen?.cancelled) {
+        try {
+          await this.sendEncrypted(channel.buildExecRequest(CONTAINER_MONITOR_COMMAND));
+        } catch (error) {
+          this.clearPendingContainerChannelOpen(channel);
+          this.containerChannel = null;
+          await this.sendAuxiliaryChannelClose(channel);
+          throw error;
+        }
+      } else if (this.pendingContainerActionChannels.has(channelID)) {
+        const action = this.pendingContainerActionChannels.get(channelID)!;
+        action.openConfirmed = true;
+        if (action.timeout) { clearTimeout(action.timeout); action.timeout = null; }
+        if (action.cancelled || this.containerWebSocket === null) {
+          await this.sendAuxiliaryChannelClose(channel);
+        } else {
+          try {
+            await this.sendEncrypted(channel.buildExecRequest(action.command));
+          } catch (error) {
+            this.finalizeContainerAction(action, error instanceof Error ? error.message : String(error));
+            await this.sendAuxiliaryChannelClose(channel);
+          }
+        }
       } else {
         // An attachment WebSocket may close while its channel is opening.
         this.clearPendingSFTPChannelOpen(channel);
@@ -786,11 +847,16 @@ export class SSHSession {
       } else if (channel === this.processChannel) {
         this.processChannel = null;
         this.sendProcessError('SSH server rejected the process-monitor channel');
+      } else if (channel === this.containerChannel) {
+        this.containerChannel = null;
+        this.sendContainerError('SSH server rejected the container-monitor channel');
       } else if (channel === this.systemProbe?.channel) {
         this.cleanupSystemProbe(this.systemProbe);
       } else {
         const kill = this.pendingProcessKillChannels.get(channelID);
         if (kill) this.finalizeProcessKill(kill, 'SSH server rejected the kill channel');
+        const action = this.pendingContainerActionChannels.get(channelID);
+        if (action) this.finalizeContainerAction(action, 'SSH server rejected the container action channel');
       }
       return;
     }
@@ -835,6 +901,15 @@ export class SSHSession {
         } else {
           this.sendProcessJson({ type: 'process_ready' });
         }
+      } else if (channel === this.containerChannel) {
+        this.clearPendingContainerChannelOpen(channel);
+        if (type === SSH_MSG_CHANNEL_FAILURE) {
+          this.containerChannel = null;
+          this.sendContainerError('SSH server rejected the docker command');
+          await this.sendAuxiliaryChannelClose(channel);
+        } else {
+          this.sendContainerJson({ type: 'container_ready' });
+        }
       }
       return;
     }
@@ -854,8 +929,12 @@ export class SSHSession {
         }
       } else if (channel === this.processChannel) {
         this.consumeProcessOutput(output);
+      } else if (channel === this.containerChannel) {
+        this.consumeContainerOutput(output);
       } else if (this.pendingProcessKillChannels.has(channelID)) {
         this.appendKillOutput(this.pendingProcessKillChannels.get(channelID)!, output, false);
+      } else if (this.pendingContainerActionChannels.has(channelID)) {
+        this.appendContainerActionOutput(this.pendingContainerActionChannels.get(channelID)!, output, false);
       }
       await this.adjustLocalWindow(channel);
       return;
@@ -872,8 +951,14 @@ export class SSHSession {
       } else if (channel === this.processChannel) {
         const message = new TextDecoder().decode(output).trim();
         if (message) this.sendProcessError(message.slice(0, 512));
+      } else if (channel === this.containerChannel) {
+        // docker 的 stderr 只在缺命令时出现一次，保留原文以便前端提示。
+        const message = new TextDecoder().decode(output).trim();
+        if (message) this.containerStderr = message.slice(0, 512);
       } else if (this.pendingProcessKillChannels.has(channelID)) {
         this.appendKillOutput(this.pendingProcessKillChannels.get(channelID)!, output, true);
+      } else if (this.pendingContainerActionChannels.has(channelID)) {
+        this.appendContainerActionOutput(this.pendingContainerActionChannels.get(channelID)!, output, true);
       }
       await this.adjustLocalWindow(channel);
       return;
@@ -893,6 +978,7 @@ export class SSHSession {
       }
       else if (channel === this.sftpChannel) this.sftpHandler?.onClosed();
       else if (channel === this.processChannel) this.flushProcessBuffer();
+      else if (channel === this.containerChannel) this.flushContainerBuffer();
       return;
     }
     if (type === SSH_MSG_CHANNEL_CLOSE) {
@@ -916,9 +1002,16 @@ export class SSHSession {
           this.flushProcessBuffer();
           this.processChannel = null;
           this.sendProcessError('The process monitor stopped');
+        } else if (channel === this.containerChannel) {
+          this.clearPendingContainerChannelOpen(channel);
+          this.flushContainerBuffer();
+          this.containerChannel = null;
+          this.sendContainerError('The container monitor stopped');
         } else {
           const kill = this.pendingProcessKillChannels.get(channelID);
           if (kill) this.finalizeProcessKill(kill);
+          const action = this.pendingContainerActionChannels.get(channelID);
+          if (action) this.finalizeContainerAction(action);
         }
       }
       return;
@@ -938,6 +1031,7 @@ export class SSHSession {
     this.status('shell_ready', 'Shell is ready');
     if (this.sftpAttachUrl) this.sendJson({ type: 'sftp_attach', url: this.sftpAttachUrl });
     if (this.processAttachUrl) this.sendJson({ type: 'process_attach', url: this.processAttachUrl });
+    if (this.containerAttachUrl) this.sendJson({ type: 'container_attach', url: this.containerAttachUrl });
     void this.openSystemProbeChannel().catch(() => undefined);
     void this.flushInput();
   }
@@ -1074,6 +1168,260 @@ export class SSHSession {
       return;
     }
     throw new Error('Unsupported process-monitor message');
+  }
+
+  // ── Container monitor ───────────────────────────────────────────
+
+  attachContainerWebSocket(ws: WebSocket): void {
+    if (this.phase === 'closed' || this.containerWebSocket) {
+      try { ws.close(1008, 'Container monitor is unavailable'); } catch { /* already closed */ }
+      return;
+    }
+    this.containerWebSocket = ws;
+  }
+
+  detachContainerWebSocket(ws: WebSocket): void {
+    if (this.containerWebSocket !== ws) return;
+    this.containerWebSocket = null;
+    void this.closeContainerChannel();
+    for (const action of [...this.pendingContainerActionChannels.values()]) {
+      action.cancelled = true;
+      if (action.timeout) { clearTimeout(action.timeout); action.timeout = null; }
+      if (action.openConfirmed) {
+        if (action.channel.isOpen() && !action.channel.hasSentClose()) void this.sendAuxiliaryChannelClose(action.channel);
+        this.finalizeContainerAction(action, 'Container monitor disconnected');
+      }
+    }
+  }
+
+  setContainerAttachUrl(url: string): void {
+    this.containerAttachUrl = url;
+  }
+
+  async handleContainerClientMessage(message: string | ArrayBuffer): Promise<void> {
+    if (this.phase === 'closed' || !this.containerWebSocket) return;
+    if (message instanceof ArrayBuffer || message.length > 4096) throw new Error('Invalid container-monitor message');
+    let decoded: unknown;
+    try { decoded = JSON.parse(message); } catch { throw new Error('Invalid container-monitor JSON'); }
+    if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) throw new Error('Invalid container-monitor message');
+    const value = decoded as Record<string, unknown>;
+    if (value.type === 'ping') { this.sendContainerJson({ type: 'pong' }); return; }
+    if (value.type === 'container_start') { await this.openContainerChannel(); return; }
+    if (value.type === 'container_stop') { await this.closeContainerChannel(); return; }
+    if (value.type === 'container_action') {
+      const requestId = value.requestId;
+      if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 64) {
+        throw new Error('Invalid container-action request: requestId is missing or too long');
+      }
+      await this.openContainerActionChannel(requestId, value.action, value.target, value.tail);
+      return;
+    }
+    throw new Error('Unsupported container-monitor message');
+  }
+
+  private async openContainerChannel(): Promise<void> {
+    if (!this.containerWebSocket) throw new Error('Container-monitor WebSocket is not attached');
+    if (this.phase !== 'ready') throw new Error('SSH connection is not ready');
+    if (this.pendingContainerChannelOpen?.cancelled) throw new Error('The previous container channel is still closing');
+    if (this.containerChannel) {
+      this.sendContainerJson({ type: 'container_ready' });
+      return;
+    }
+    const channelID = this.nextChannelID++;
+    const channel = new SSHChannel();
+    const pending: PendingProcessChannelOpen = { channelID, channel, timeout: null, cancelled: false };
+    this.channels.set(channelID, channel);
+    this.containerChannel = channel;
+    this.containerBuffer = '';
+    this.containerDecoder = new TextDecoder();
+    this.containerStderr = '';
+    this.pendingContainerChannelOpen = pending;
+    try {
+      await this.sendEncrypted(channel.buildOpenSession(channelID));
+      if (this.pendingContainerChannelOpen === pending) {
+        pending.timeout = setTimeout(() => this.expirePendingContainerChannelOpen(pending), PROCESS_CHANNEL_OPEN_TIMEOUT_MS);
+      }
+    } catch (error) {
+      this.clearPendingContainerChannelOpen(channel);
+      this.channels.delete(channelID);
+      this.containerChannel = null;
+      throw error;
+    }
+  }
+
+  private async closeContainerChannel(): Promise<void> {
+    const channel = this.containerChannel;
+    const pending = this.pendingContainerChannelOpen;
+    if (pending?.channel === channel) pending.cancelled = true;
+    this.containerChannel = null;
+    this.containerBuffer = '';
+    if (!channel?.isOpen()) return;
+    await this.sendAuxiliaryChannelClose(channel);
+  }
+
+  /** One-shot exec channel for start/stop/restart/rm/rmi/logs. */
+  private async openContainerActionChannel(requestId: string, action: unknown, target: unknown, tail: unknown): Promise<void> {
+    if (!this.containerWebSocket) throw new Error('Container-monitor WebSocket is not attached');
+    if (this.phase !== 'ready') throw new Error('SSH connection is not ready');
+    const command = buildContainerActionCommand(action, target, tail);
+    if (!command) throw new Error('Unsupported container action');
+    if (this.pendingContainerActionChannels.size >= 4) throw new Error('Too many container actions in progress');
+    const channelID = this.nextChannelID++;
+    const channel = new SSHChannel();
+    const pending: PendingContainerActionChannel = {
+      channelID,
+      channel,
+      requestId,
+      command,
+      timeout: null,
+      cancelled: false,
+      openConfirmed: false,
+      stdoutDecoder: new TextDecoder(),
+      stderrDecoder: new TextDecoder(),
+      stdout: '',
+      stderr: '',
+      stdoutBytes: 0,
+      stderrBytes: 0,
+      finalized: false,
+    };
+    this.channels.set(channelID, channel);
+    this.pendingContainerActionChannels.set(channelID, pending);
+    try {
+      await this.sendEncrypted(channel.buildOpenSession(channelID));
+      pending.timeout = setTimeout(() => this.expirePendingContainerAction(pending), CONTAINER_ACTION_CHANNEL_OPEN_TIMEOUT_MS);
+    } catch (error) {
+      this.clearPendingContainerAction(channel);
+      this.channels.delete(channelID);
+      this.pendingContainerActionChannels.delete(channelID);
+      throw error;
+    }
+  }
+
+  private appendContainerActionOutput(action: PendingContainerActionChannel, output: Uint8Array, isStderr: boolean): void {
+    if (action.finalized) return;
+    const budget = CONTAINER_ACTION_MAX_OUTPUT_BYTES - (isStderr ? action.stderrBytes : action.stdoutBytes);
+    if (budget <= 0) return;
+    const slice = output.byteLength > budget ? output.subarray(0, budget) : output;
+    const text = (isStderr ? action.stderrDecoder : action.stdoutDecoder).decode(slice, { stream: true });
+    if (isStderr) { action.stderr += text; action.stderrBytes += slice.byteLength; }
+    else { action.stdout += text; action.stdoutBytes += slice.byteLength; }
+    // Commands that produce no stdout and exit 0 still need a completion signal;
+    // CHANNEL_CLOSE drives finalize for every action.
+    if (action.timeout === null && action.openConfirmed) {
+      action.timeout = setTimeout(() => this.expirePendingContainerAction(action), CONTAINER_ACTION_TIMEOUT_MS);
+    }
+  }
+
+  private expirePendingContainerAction(action: PendingContainerActionChannel): void {
+    if (action.finalized) return;
+    if (action.timeout) { clearTimeout(action.timeout); action.timeout = null; }
+    this.finalizeContainerAction(action, 'The container action timed out');
+    if (action.channel.isOpen()) void this.sendAuxiliaryChannelClose(action.channel);
+  }
+
+  private finalizeContainerAction(action: PendingContainerActionChannel, error?: string): void {
+    if (action.finalized) return;
+    action.finalized = true;
+    if (action.timeout) { clearTimeout(action.timeout); action.timeout = null; }
+    this.clearPendingContainerAction(action.channel);
+    this.pendingContainerActionChannels.delete(action.channelID);
+    const stdout = action.stdoutDecoder.decode();
+    const stderr = action.stderrDecoder.decode();
+    const exitStatus = error ? null : 0;
+    this.sendContainerJson({
+      type: 'container_action_result',
+      requestId: action.requestId,
+      ok: !error && exitStatus === 0,
+      exitStatus,
+      stdout: stdout.slice(0, CONTAINER_ACTION_MAX_OUTPUT_BYTES),
+      stderr: (error ?? stderr).slice(0, CONTAINER_ACTION_MAX_OUTPUT_BYTES),
+    });
+  }
+
+  private clearPendingContainerAction(channel: SSHChannel): void {
+    for (const [id, action] of this.pendingContainerActionChannels) {
+      if (action.channel === channel) {
+        if (action.timeout) { clearTimeout(action.timeout); action.timeout = null; }
+        this.pendingContainerActionChannels.delete(id);
+        return;
+      }
+    }
+  }
+
+  private consumeContainerOutput(data: Uint8Array): void {
+    this.containerBuffer += this.containerDecoder.decode(data, { stream: true });
+    if (this.containerBuffer.length > CONTAINER_MAX_BUFFER_BYTES) {
+      const marker = this.containerBuffer.lastIndexOf(CONTAINER_SNAPSHOT_MARKER);
+      this.containerBuffer = marker >= 0
+        ? this.containerBuffer.slice(marker)
+        : retainContainerMarkerPrefix(this.containerBuffer);
+      this.sendContainerError('Container snapshot exceeded the buffer limit');
+      return;
+    }
+    while (true) {
+      const first = this.containerBuffer.indexOf(CONTAINER_SNAPSHOT_MARKER);
+      if (first < 0) {
+        this.containerBuffer = retainContainerMarkerPrefix(this.containerBuffer);
+        return;
+      }
+      if (first > 0) this.containerBuffer = this.containerBuffer.slice(first);
+      const next = this.containerBuffer.indexOf(CONTAINER_SNAPSHOT_MARKER, CONTAINER_SNAPSHOT_MARKER.length);
+      if (next < 0) return;
+      this.emitContainerSnapshot(this.containerBuffer.slice(CONTAINER_SNAPSHOT_MARKER.length, next));
+      this.containerBuffer = this.containerBuffer.slice(next);
+    }
+  }
+
+  private flushContainerBuffer(): void {
+    this.containerBuffer += this.containerDecoder.decode();
+    const marker = this.containerBuffer.lastIndexOf(CONTAINER_SNAPSHOT_MARKER);
+    if (marker >= 0) this.emitContainerSnapshot(this.containerBuffer.slice(marker + CONTAINER_SNAPSHOT_MARKER.length));
+    this.containerBuffer = '';
+    this.containerDecoder = new TextDecoder();
+  }
+
+  private emitContainerSnapshot(raw: string): void {
+    // 没有 docker 时首个标记行之后只会出现 "command not found"，据此提示安装。
+    if (!this.containerDockerMissing && /docker:.*not found|command not found/i.test(raw)) {
+      this.containerDockerMissing = true;
+      this.sendContainerJson({ type: 'container_error', code: 'docker_missing', message: 'Docker is not installed on this host' });
+      return;
+    }
+    const snapshot = parseContainerFrame(raw, Date.now());
+    if (snapshot.containers.length > 0 || snapshot.images !== null) {
+      this.sendContainerJson({ type: 'container_snapshot', ...snapshot });
+    }
+  }
+
+  private expirePendingContainerChannelOpen(expected: PendingProcessChannelOpen): void {
+    if (this.pendingContainerChannelOpen !== expected) return;
+    this.pendingContainerChannelOpen = null;
+    expected.timeout = null;
+    expected.cancelled = true;
+    if (this.containerChannel === expected.channel) this.containerChannel = null;
+    this.sendContainerError('Timed out opening the container-monitor channel');
+    if (expected.channel.isOpen()) void this.sendAuxiliaryChannelClose(expected.channel);
+    try { this.containerWebSocket?.close(1011, 'Container channel setup timed out'); } catch { /* already closed */ }
+  }
+
+  private clearPendingContainerChannelOpen(channel?: SSHChannel): void {
+    const pending = this.pendingContainerChannelOpen;
+    if (!pending || (channel && pending.channel !== channel)) return;
+    if (pending.timeout) clearTimeout(pending.timeout);
+    pending.timeout = null;
+    this.pendingContainerChannelOpen = null;
+  }
+
+  private sendContainerJson(message: Record<string, unknown>): void {
+    try {
+      if (this.containerWebSocket?.readyState === WebSocket.OPEN) {
+        this.containerWebSocket.send(JSON.stringify(message));
+      }
+    } catch { /* The monitor socket closed between the check and the send. */ }
+  }
+
+  private sendContainerError(message: string): void {
+    this.sendContainerJson({ type: 'container_error', message });
   }
 
   private async openProcessKillChannel(pid: number, requestId: string): Promise<void> {

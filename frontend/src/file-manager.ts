@@ -1,5 +1,5 @@
 import type { FileListView } from './file-list-view';
-import { fileKind } from './file-kind';
+import { fileKind, isEditableText } from './file-kind';
 
 export const MAX_SFTP_FILE_SIZE = 64 * 1024 * 1024;
 /** Preview downloads are capped lower to keep phone memory and Worker JSON small. */
@@ -7,6 +7,9 @@ const MAX_PREVIEW_TEXT_SIZE = 1024 * 1024;
 const MAX_PREVIEW_IMAGE_SIZE = 8 * 1024 * 1024;
 const PREVIEWABLE_KINDS = new Set(['image', 'document', 'script', 'config']);
 export const SFTP_UPLOAD_CHUNK_SIZE = 64 * 1024;
+
+/** 文本编辑器一次可读入 / 写回的最大体积，超过就只能下载。 */
+export const MAX_EDIT_TEXT_SIZE = 2 * 1024 * 1024;
 
 export interface FileManagerElements {
   panel: HTMLElement;
@@ -56,6 +59,15 @@ export interface FileManagerElements {
   sheetSubtitle?: HTMLElement | null;
   sheetClose?: HTMLButtonElement | null;
   sheetActions?: HTMLElement | null;
+  editorDialog?: HTMLDialogElement | null;
+  editorTitle?: HTMLElement | null;
+  editorPath?: HTMLElement | null;
+  editorArea?: HTMLTextAreaElement | null;
+  editorStatus?: HTMLElement | null;
+  editorSave?: HTMLButtonElement | null;
+  editorClose?: HTMLButtonElement | null;
+  editorDismiss?: HTMLButtonElement | null;
+  editorCancel?: HTMLButtonElement | null;
 }
 
 export interface FileManagerOptions {
@@ -65,6 +77,8 @@ export interface FileManagerOptions {
   prompt?: (message: string, defaultValue?: string) => string | null | Promise<string | null>;
   onError?: (message: string) => void;
   onStatus?: (message: string) => void;
+  /** 只读模式下隐藏“编辑”入口；缺省表示可用。 */
+  canEdit?: () => boolean;
 }
 
 export interface SFTPEntry {
@@ -102,6 +116,9 @@ interface PendingRequest {
   path: string;
   historyMode?: 'push' | 'none' | 'index';
   historyIndex?: number;
+  resolve?: () => void;
+  reject?: (error: Error) => void;
+  suppressRefresh?: boolean;
 }
 
 interface UploadState {
@@ -204,6 +221,15 @@ export function collectFileManagerElements(root: ParentNode = document): FileMan
     sheetSubtitle: root.querySelector<HTMLElement>('#file-action-sheet-subtitle'),
     sheetClose: root.querySelector<HTMLButtonElement>('#file-action-sheet-close'),
     sheetActions: root.querySelector<HTMLElement>('.file-action-sheet-grid'),
+    editorDialog: root.querySelector<HTMLDialogElement>('#file-editor-dialog'),
+    editorTitle: root.querySelector<HTMLElement>('#file-editor-title'),
+    editorPath: root.querySelector<HTMLElement>('#file-editor-path'),
+    editorArea: root.querySelector<HTMLTextAreaElement>('#file-editor-area'),
+    editorStatus: root.querySelector<HTMLElement>('#file-editor-status'),
+    editorSave: root.querySelector<HTMLButtonElement>('#file-editor-save'),
+    editorClose: root.querySelector<HTMLButtonElement>('#file-editor-close'),
+    editorDismiss: root.querySelector<HTMLButtonElement>('#file-editor-dismiss'),
+    editorCancel: root.querySelector<HTMLButtonElement>('#file-editor-cancel'),
   };
 }
 
@@ -317,9 +343,16 @@ export class FileManager {
   private dragDepth = 0;
   private previewUrl: string | null = null;
 
+  /** 当前编辑器会话；null 表示编辑器关闭。 */
+  private editorState: { path: string; name: string; dirty: boolean; saving: boolean } | null = null;
+  /** 单次下载的原始文本；编辑保存按字节原样回传，避免编辑器改动行尾。 */
+  private editorText = '';
+  private readonly getEditorLanguage: () => boolean;
+
   constructor(options: FileManagerOptions) {
     this.elements = options.elements;
     this.getLanguage = options.getLanguage ?? (() => document.documentElement.lang || 'zh-CN');
+    this.getEditorLanguage = options.canEdit ?? (() => true);
     this.confirmAction = options.confirm ?? ((message) => window.confirm(message));
     this.promptAction = options.prompt ?? ((message, value) => window.prompt(message, value));
     this.onError = options.onError;
@@ -678,6 +711,7 @@ export class FileManager {
       case 'open': this.activateEntry(entry); break;
       case 'download': this.downloadSelected(); break;
       case 'preview': this.previewSelected(); break;
+      case 'edit': if (entry) this.editPath(joinPath(this.cwd, entry.name)); break;
       case 'properties': if (entry) this.showProperties(entry); break;
       case 'rename': void this.renameSelected(); break;
       case 'delete': void this.deleteSelected(); break;
@@ -698,6 +732,8 @@ export class FileManager {
       else if (action === 'download') button.disabled = !idle || !selected || selected.type !== 'file' || sizeExceedsLimit(selected.size);
       else if (action === 'preview') button.disabled = !idle || !selected || selected.type !== 'file' || !PREVIEWABLE_KINDS.has(fileKind(selected));
       else if (action === 'rename' || action === 'delete') button.disabled = !idle || !selected;
+      else if (action === 'edit') button.disabled = !idle || !selected || !isEditableText(selected)
+        || sizeExceedsLimit(selected.size) || !this.getEditorLanguage();
       else button.disabled = !idle;
     }
   }
@@ -744,7 +780,7 @@ export class FileManager {
    * Queue files for upload. The SFTP channel supports one upload at a time, so
    * the queue drains sequentially and each file reports its own progress.
    */
-  async uploadFiles(files: Iterable<File>, destination?: string): Promise<void> {
+  async uploadFiles(files: Iterable<File>, destination?: string, overwrite = false): Promise<void> {
     if (!this.ready) {
       this.showError(this.localize({ zh: 'SFTP 尚未就绪。', en: 'SFTP is not ready.' }));
       return;
@@ -769,10 +805,10 @@ export class FileManager {
         en: `Queued ${accepted.length} files for upload…`,
       });
     }
-    await this.pumpUploadQueue(destination);
+    await this.pumpUploadQueue(destination, overwrite);
   }
 
-  private async pumpUploadQueue(destination?: string): Promise<void> {
+  private async pumpUploadQueue(destination?: string, overwrite = false): Promise<void> {
     if (this.queuePumping) return;
     this.queuePumping = true;
     try {
@@ -783,7 +819,7 @@ export class FileManager {
         }
         if (this.hasTransfer() || this.uploadConfirmationPending) return;
         const file = this.uploadQueue.shift()!;
-        await this.startUpload(file, destination);
+        await this.startUpload(file, destination, overwrite);
         // The completion/cancel/error handlers call pump again once the slot frees.
         if (this.uploadState) return;
       }
@@ -798,7 +834,7 @@ export class FileManager {
     this.updateControls();
   }
 
-  private async startUpload(file: File, destination?: string): Promise<void> {
+  private async startUpload(file: File, destination?: string, forceOverwrite = false): Promise<void> {
     if (!this.ready || this.hasTransfer() || this.uploadConfirmationPending) return;
     if (file.size > MAX_SFTP_FILE_SIZE) {
       this.showError(this.localize({ zh: '文件不能超过 64 MiB。', en: 'Files cannot exceed 64 MiB.' }));
@@ -811,8 +847,8 @@ export class FileManager {
     }
     const existing = this.entries.find((entry) => joinPath(this.cwd, entry.name) === path);
     const generation = this.generation;
-    let overwrite = false;
-    if (existing) {
+    let overwrite = forceOverwrite;
+    if (existing && !forceOverwrite) {
       this.uploadConfirmationPending = true;
       this.updateControls();
       try {
@@ -858,6 +894,215 @@ export class FileManager {
     if (entry) this.startDownload(entry, false);
   }
 
+  /** Public path-based action used by alternative file-manager views. */
+  downloadPath(path: string): void {
+    const normalized = normalizePath(path);
+    const name = normalized.split('/').filter(Boolean).pop() || 'download';
+    const entry = this.sourceEntries.find((item) => joinPath(this.cwd, item.name) === normalized)
+      ?? { name, type: 'file' as const, size: '', mtime: '', permissions: '' };
+    this.startDownload(entry, false, normalized);
+  }
+
+  previewPath(path: string): void {
+    const normalized = normalizePath(path);
+    const name = normalized.split('/').filter(Boolean).pop() || 'file';
+    const entry = this.sourceEntries.find((item) => joinPath(this.cwd, item.name) === normalized)
+      ?? { name, type: 'file' as const, size: '', mtime: '', permissions: '' };
+    if (!PREVIEWABLE_KINDS.has(fileKind(entry))) {
+      this.downloadPath(normalized);
+      return;
+    }
+    this.startDownload(entry, true, normalized);
+  }
+
+  // ── Text editor ──────────────────────────────────────────────────
+
+  /** 打开文本编辑器读取 `path`；非白名单类型直接退回下载。 */
+  editPath(path: string): void {
+    const normalized = normalizePath(path);
+    const name = normalized.split('/').filter(Boolean).pop() || 'file';
+    const entry = this.sourceEntries.find((item) => joinPath(this.cwd, item.name) === normalized)
+      ?? { name, type: 'file' as const, size: '', mtime: '', permissions: '' };
+    if (!isEditableText(entry)) {
+      this.downloadPath(normalized);
+      return;
+    }
+    const size = transferSize(entry.size);
+    if (size !== null && size > MAX_EDIT_TEXT_SIZE) {
+      this.showError(this.localize({
+        zh: '文件超过 2 MiB，无法在线编辑，请下载后修改。',
+        en: 'Files over 2 MiB cannot be edited online; download it instead.',
+      }));
+      return;
+    }
+    this.openEditor(normalized, name);
+  }
+
+  private openEditor(path: string, name: string): void {
+    const dialog = this.elements.editorDialog;
+    const area = this.elements.editorArea;
+    if (!dialog || !area) return;
+    this.editorState = { path, name, dirty: false, saving: false };
+    this.editorText = '';
+    if (this.elements.editorTitle) this.elements.editorTitle.textContent = name;
+    if (this.elements.editorPath) this.elements.editorPath.textContent = path;
+    area.value = '';
+    area.readOnly = true;
+    this.setEditorStatus({ zh: '正在读取文件…', en: 'Loading file…' });
+    this.updateEditorControls();
+    if (!dialog.open) dialog.showModal();
+    // 走下载通道复用进度与取消逻辑，只是把结果转成文本而不是存盘。
+    this.startDownload({ name, type: 'file', size: '', mtime: '', permissions: '' }, true, path);
+  }
+
+  private setEditorStatus(copy: LocalizedText): void {
+    const status = this.elements.editorStatus;
+    if (!status) return;
+    status.dataset.i18nZh = copy.zh;
+    status.dataset.i18nEn = copy.en;
+    status.textContent = this.localize(copy);
+  }
+
+  private updateEditorControls(): void {
+    const state = this.editorState;
+    const area = this.elements.editorArea;
+    if (area) area.readOnly = !state || state.saving;
+    if (this.elements.editorSave) {
+      this.elements.editorSave.disabled = !state || state.saving || !state.dirty;
+    }
+    if (this.elements.editorCancel) {
+      this.elements.editorCancel.hidden = !state?.dirty;
+    }
+  }
+
+  private closeEditor(): void {
+    const dialog = this.elements.editorDialog;
+    this.editorState = null;
+    this.editorText = '';
+    dialog?.close();
+  }
+
+  private requestCloseEditor(): void {
+    if (!this.editorState?.dirty) {
+      this.closeEditor();
+      return;
+    }
+    void this.confirmEditorClose();
+  }
+
+  private async confirmEditorClose(): Promise<void> {
+    try {
+      const confirmed = await this.confirmAction(this.localize({
+        zh: '当前文件有未保存的修改，确定要放弃吗？',
+        en: 'There are unsaved changes. Discard them?',
+      }));
+      if (confirmed) this.closeEditor();
+    } catch { /* 确认框被关闭时保留编辑器。 */ }
+  }
+
+  /** 用下载通道读到的内容填充编辑器。 */
+  private fillEditor(name: string, blob: Blob): void {
+    const state = this.editorState;
+    const area = this.elements.editorArea;
+    if (!state || !area) return;
+    if (state.name !== name) return;
+    void blob.text().then((text) => {
+      if (this.editorState !== state) return;
+      // 0x00 说明是二进制，编辑器会毁掉内容，直接拒绝而不是猜。
+      if (text.includes('\0')) {
+        this.closeEditor();
+        this.showError(this.localize({ zh: '该文件包含二进制内容，无法编辑。', en: 'This file contains binary data and cannot be edited.' }));
+        return;
+      }
+      this.editorText = text;
+      area.value = text;
+      area.readOnly = false;
+      this.setEditorStatus({ zh: '已读取，可以编辑', en: 'Loaded; ready to edit' });
+      this.updateEditorControls();
+      area.focus();
+    }).catch(() => {
+      this.closeEditor();
+      this.showError(this.localize({ zh: '文件读取失败。', en: 'Failed to read the file.' }));
+    });
+  }
+
+  private async saveEditor(): Promise<void> {
+    const state = this.editorState;
+    const area = this.elements.editorArea;
+    if (!state || !area || state.saving) return;
+    if (!this.ready || !this.isSocketOpen()) {
+      this.setEditorStatus({ zh: 'SFTP 尚未就绪，无法保存。', en: 'SFTP is not ready; cannot save.' });
+      return;
+    }
+    state.saving = true;
+    this.setEditorStatus({ zh: '正在保存…', en: 'Saving…' });
+    this.updateEditorControls();
+    try {
+      // 用编辑器当前文本覆盖远端文件：先写临时文件再改名，失败不影响原文件。
+      const file = new File([area.value], state.name, { type: 'text/plain' });
+      await this.uploadFiles([file], state.path, true);
+      this.editorText = area.value;
+      state.dirty = false;
+      this.setEditorStatus({ zh: '已保存', en: 'Saved' });
+    } catch (error) {
+      this.setEditorStatus({
+        zh: `保存失败：${error instanceof Error ? error.message : String(error)}`,
+        en: `Save failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    } finally {
+      if (this.editorState === state) {
+        state.saving = false;
+        this.updateEditorControls();
+      }
+    }
+  }
+
+  /** 供外部查询：编辑器是否有未保存改动（离开页面前确认用）。 */
+  hasUnsavedEditorChanges(): boolean {
+    return Boolean(this.editorState?.dirty);
+  }
+
+  /** 供外部查询：编辑器是否打开（切视图时保留）。 */
+  isEditorOpen(): boolean {
+    return Boolean(this.elements.editorDialog?.open);
+  }
+
+  /** Promise-based operations for the SVAR file-manager adapter. */
+  createDirectoryAt(parent: string, name: string): Promise<void> {
+    const path = joinPath(normalizePath(parent), name);
+    return this.requestMutation('mkdir', path, { type: 'sftp_mkdir', path });
+  }
+
+  renamePath(oldPath: string, newPath: string): Promise<void> {
+    const oldNormalized = normalizePath(oldPath);
+    const newNormalized = normalizePath(newPath);
+    return this.requestMutation('rename', oldNormalized, {
+      type: 'sftp_rename', oldPath: oldNormalized, newPath: newNormalized,
+    });
+  }
+
+  async deletePath(path: string, directory = false): Promise<void> {
+    const normalized = normalizePath(path);
+    const operation = directory ? 'rmdir' : 'delete';
+    await this.requestMutation(operation, normalized, {
+      type: directory ? 'sftp_rmdir' : 'sftp_delete', path: normalized,
+    });
+  }
+
+  private requestMutation(operation: string, path: string, message: JsonRecord): Promise<void> {
+    if (!this.ready || !this.isSocketOpen()) {
+      return Promise.reject(new Error(this.localize({ zh: 'SFTP 尚未就绪。', en: 'SFTP is not ready.' })));
+    }
+    const requestId = this.createRequest(operation, path, { suppressRefresh: true });
+    return new Promise<void>((resolve, reject) => {
+      const pending = this.pending.get(requestId);
+      if (!pending) { reject(new Error('SFTP request could not be created')); return; }
+      pending.resolve = resolve;
+      pending.reject = reject;
+      this.send({ ...message, requestId });
+    });
+  }
+
   /** Download a previewable file into the preview dialog instead of saving it. */
   previewSelected(): void {
     const entry = this.selectedEntry();
@@ -869,7 +1114,7 @@ export class FileManager {
     this.startDownload(entry, true);
   }
 
-  private startDownload(entry: SFTPEntry, preview: boolean): void {
+  private startDownload(entry: SFTPEntry, preview: boolean, explicitPath?: string): void {
     if (!this.ready || entry.type !== 'file' || this.hasTransfer()) return;
     const limit = preview
       ? (fileKind(entry) === 'image' ? MAX_PREVIEW_IMAGE_SIZE : MAX_PREVIEW_TEXT_SIZE)
@@ -881,7 +1126,7 @@ export class FileManager {
         : this.localize({ zh: '文件不能超过 64 MiB。', en: 'Files cannot exceed 64 MiB.' }));
       return;
     }
-    const path = joinPath(this.cwd, entry.name);
+    const path = explicitPath ? normalizePath(explicitPath) : joinPath(this.cwd, entry.name);
     const requestId = this.createRequest('download', path);
     this.downloadState = {
       generation: this.generation,
@@ -962,6 +1207,41 @@ export class FileManager {
     }, { signal });
     this.elements.propertiesClose?.addEventListener('click', () => this.elements.propertiesDialog?.close(), { signal });
     this.elements.propertiesDismiss?.addEventListener('click', () => this.elements.propertiesDialog?.close(), { signal });
+    const editorArea = this.elements.editorArea;
+    if (editorArea) {
+      editorArea.addEventListener('input', () => {
+        const state = this.editorState;
+        if (!state || state.saving) return;
+        state.dirty = editorArea.value !== this.editorText;
+        this.updateEditorControls();
+      }, { signal });
+      // Ctrl/Cmd+S 保存，Esc 由 dialog 的 cancel 事件统一处理。
+      editorArea.addEventListener('keydown', (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+          event.preventDefault();
+          void this.saveEditor();
+        }
+      }, { signal });
+    }
+    this.elements.editorSave?.addEventListener('click', () => void this.saveEditor(), { signal });
+    this.elements.editorCancel?.addEventListener('click', () => {
+      // 放弃改动：把编辑器内容还原成上次读到的文本。
+      const area = this.elements.editorArea;
+      const state = this.editorState;
+      if (!area || !state) return;
+      area.value = this.editorText;
+      state.dirty = false;
+      this.setEditorStatus({ zh: '已放弃修改', en: 'Changes discarded' });
+      this.updateEditorControls();
+    }, { signal });
+    const editorCancel = () => this.requestCloseEditor();
+    this.elements.editorClose?.addEventListener('click', editorCancel, { signal });
+    this.elements.editorDismiss?.addEventListener('click', editorCancel, { signal });
+    this.elements.editorDialog?.addEventListener('cancel', (event) => {
+      // Esc 先走确认，直接 close 会让放弃确认变成默认行为。
+      event.preventDefault();
+      editorCancel();
+    }, { signal });
 
     this.elements.tableBody.addEventListener('click', (event) => {
       const menu = event.target instanceof Element
@@ -1443,8 +1723,9 @@ export class FileManager {
     const pending = this.pending.get(requestId);
     if (!pending || pending.generation !== this.generation || !['mkdir', 'rename', 'delete', 'rmdir'].includes(pending.operation)) return;
     this.pending.delete(requestId);
+    pending.resolve?.();
     this.setStatus({ zh: '操作完成', en: 'Operation completed' });
-    this.refresh();
+    if (!pending.suppressRefresh) this.refresh();
   }
 
   private async handleUploadReady(message: JsonRecord): Promise<void> {
@@ -1573,6 +1854,15 @@ export class FileManager {
     this.pending.delete(state.requestId);
     this.downloadState = null;
     const blob = new Blob(state.chunks);
+    // 编辑器复用下载通道：命中编辑器会话时把字节转成文本，而不是弹出预览或存盘。
+    const editing = state.preview && this.editorState && this.editorState.name === state.name;
+    if (editing) {
+      this.hideProgress();
+      this.fillEditor(state.name, blob);
+      this.updateControls();
+      void this.pumpUploadQueue();
+      return;
+    }
     if (state.preview) void this.showPreview(state.name, blob);
     else this.saveBlob(blob, state.name);
     this.hideProgress();
@@ -1600,6 +1890,7 @@ export class FileManager {
     }
     const fallback = this.localize({ zh: '文件操作失败。', en: 'The file operation failed.' });
     const serverMessage = typeof message.message === 'string' && message.message ? message.message : fallback;
+    pending?.reject?.(new Error(serverMessage));
     const transfer = requestId === this.uploadState?.requestId
       ? this.uploadState
       : requestId === this.downloadState?.requestId
@@ -1607,6 +1898,10 @@ export class FileManager {
         : null;
     if (transfer) {
       this.abortTransfers(true);
+    }
+    // 编辑器读入失败：错误显示在编辑器状态行，并关掉空对话框。
+    if (this.editorState && transfer === this.downloadState) {
+      this.closeEditor();
     }
     this.showError(serverMessage);
   }

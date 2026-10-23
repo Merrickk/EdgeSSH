@@ -26,6 +26,35 @@ export function fileKind(entry: Pick<SFTPEntry, 'name' | 'type'>): FileKind {
   return dot < 0 ? 'file' : extensions.get(name.slice(dot + 1)) ?? 'file';
 }
 
+/**
+ * 可编辑文本的白名单：只放确定是纯文本的扩展名与文件名。
+ * 图片、压缩包和 PDF 即使被粗分为 document/archive，也不能进编辑器。
+ */
+const textExtensions = new Set([
+  'txt', 'text', 'md', 'markdown', 'rst', 'log',
+  'json', 'jsonc', 'yaml', 'yml', 'toml', 'ini', 'conf', 'cfg', 'config', 'env',
+  'service', 'socket', 'timer', 'properties', 'xml', 'csv', 'tsv',
+  'sh', 'bash', 'zsh', 'fish', 'py', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx',
+  'php', 'rb', 'pl', 'lua', 'go', 'rs', 'c', 'h', 'cpp', 'hpp', 'cc', 'hxx',
+  'java', 'sql', 'ps1', 'bat', 'cmd',
+].join(' ').split(' '));
+const textFileNames = new Set([
+  'dockerfile', 'makefile', 'justfile', 'readme', 'license', 'licence',
+  'changelog', 'authors', 'notice', 'hosts', 'crontab',
+  '.env', '.env.local', '.env.example', '.bashrc', '.zshrc', '.profile',
+  '.bash_profile', '.gitignore', '.dockerignore', '.npmrc', '.editorconfig', '.htaccess',
+]);
+
+/** 只有普通文件且命中白名单时才允许进入文本编辑器。 */
+export function isEditableText(entry: Pick<SFTPEntry, 'name' | 'type'>): boolean {
+  if (entry.type !== 'file') return false;
+  const name = entry.name.toLowerCase();
+  if (textFileNames.has(name)) return true;
+  const dot = name.lastIndexOf('.');
+  if (dot < 0) return false;
+  return textExtensions.has(name.slice(dot + 1));
+}
+
 export const fileKindLabels: Record<FileKind, { zh: string; en: string }> = {
   folder: { zh: '文件夹', en: 'Folder' },
   archive: { zh: '压缩包', en: 'Archive' },

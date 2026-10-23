@@ -87,18 +87,28 @@ function FileNode({ node, style }: NodeRendererProps<FileListItem>) {
   </div>;
 }
 
+/** 从 CSS 读取行高，独立页与工作台坞各有一套紧凑度。 */
+function readRowHeight(): number {
+  if (matchMedia('(max-width: 600px)').matches) return 48;
+  const raw = getComputedStyle(document.documentElement).getPropertyValue('--files-row-height');
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed >= 24 ? parsed : 44;
+}
+
 function FileList({ snapshot, actions }: { snapshot: FileListSnapshot; actions: FileListActions }) {
   const viewport = useRef<HTMLDivElement>(null);
   const tree = useRef<TreeApi<FileListItem>>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [mobile, setMobile] = useState(() => matchMedia('(max-width: 600px)').matches);
+  // 行高跟随独立页/终端坞两套 CSS：紧凑视图 34px，宽列表 44px，触屏保持大目标。
+  const [rowHeight, setRowHeight] = useState(() => readRowHeight());
   useLayoutEffect(() => {
     const observer = new ResizeObserver(([entry]) => {
       setSize({ width: entry.contentRect.width, height: entry.contentRect.height });
     });
     observer.observe(viewport.current!);
     const media = matchMedia('(max-width: 600px)');
-    const update = () => setMobile(media.matches);
+    const update = () => { setMobile(media.matches); setRowHeight(readRowHeight()); };
     media.addEventListener('change', update);
     return () => { observer.disconnect(); media.removeEventListener('change', update); };
   }, []);
@@ -119,7 +129,7 @@ function FileList({ snapshot, actions }: { snapshot: FileListSnapshot; actions: 
       {/* 右侧仍是当前目录的平铺列表；目录展开由左侧负责，不额外维护第二棵远端树。 */}
       {size.width > 0 && size.height > 0 && <ActionsContext.Provider value={actions}><Tree<FileListItem>
         ref={tree} data={snapshot.items} width={size.width} height={size.height}
-        rowHeight={mobile ? 48 : 44} indent={0} overscanCount={4}
+        rowHeight={rowHeight} indent={0} overscanCount={4}
         selection={snapshot.selectedId} selectionFollowsFocus disableMultiSelection
         disableDrag disableDrop disableEdit disableDeselectOnClick
         aria-label={snapshot.chinese ? '文件列表' : 'File list'}

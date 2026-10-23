@@ -10,7 +10,8 @@ import { FORWARD_RETENTION_MS, previewError } from '../forwarding/security';
 interface MainAttachment { role: 'main'; phase: 'waiting' | 'connecting' | 'connected' }
 interface SFTPAttachment { role: 'sftp'; phase: 'connected' }
 interface ProcessAttachment { role: 'process'; phase: 'connected' }
-type Attachment = MainAttachment | SFTPAttachment | ProcessAttachment;
+interface ContainerAttachment { role: 'container'; phase: 'connected' }
+type Attachment = MainAttachment | SFTPAttachment | ProcessAttachment | ContainerAttachment;
 interface StoredTicket { secret: number[]; expiresAt: number; ip: string }
 interface PendingConnection {
   cancelled: boolean;
@@ -47,6 +48,11 @@ export class SSHSessionDO implements DurableObject {
   private readonly processSessions = new Map<WebSocket, SSHSession>();
   private readonly processOwners = new Map<WebSocket, WebSocket>();
   private readonly processWebSocketsByMain = new Map<WebSocket, Set<WebSocket>>();
+  private readonly containerAttachTokens = new Map<string, AuxiliaryAttachToken>();
+  private readonly containerTokenByMainWebSocket = new Map<WebSocket, string>();
+  private readonly containerSessions = new Map<WebSocket, SSHSession>();
+  private readonly containerOwners = new Map<WebSocket, WebSocket>();
+  private readonly containerWebSocketsByMain = new Map<WebSocket, Set<WebSocket>>();
   private readonly retainedForwarding = new Map<WebSocket, RetainedForwarding>();
 
   constructor(state: DurableObjectState, env: Env) {
@@ -115,16 +121,21 @@ export class SSHSessionDO implements DurableObject {
     }
     if (url.pathname === '/sftp') return this.attachSFTP(request);
     if (url.pathname === '/processes') return this.attachProcesses(request);
+    if (url.pathname === '/containers') return this.attachContainers(request);
     if (url.pathname !== '/connect') return Response.json({ error: 'Not found' }, { status: 404 });
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return Response.json({ error: 'WebSocket upgrade required' }, { status: 426 });
     const sftpAttachToken = request.headers.get('x-sftp-attach-token');
     const sftpAttachUrl = request.headers.get('x-sftp-attach-url');
     const processAttachToken = request.headers.get('x-process-attach-token');
     const processAttachUrl = request.headers.get('x-process-attach-url');
+    const containerAttachToken = request.headers.get('x-container-attach-token');
+    const containerAttachUrl = request.headers.get('x-container-attach-url');
     if (!sftpAttachToken || !SFTP_ATTACH_TOKEN_PATTERN.test(sftpAttachToken)
       || !sftpAttachUrl || !this.isValidAttachUrl(sftpAttachUrl, sftpAttachToken, '/api/sftp')
       || !processAttachToken || !SFTP_ATTACH_TOKEN_PATTERN.test(processAttachToken)
-      || !processAttachUrl || !this.isValidAttachUrl(processAttachUrl, processAttachToken, '/api/processes')) {
+      || !processAttachUrl || !this.isValidAttachUrl(processAttachUrl, processAttachToken, '/api/processes')
+      || !containerAttachToken || !SFTP_ATTACH_TOKEN_PATTERN.test(containerAttachToken)
+      || !containerAttachUrl || !this.isValidAttachUrl(containerAttachUrl, containerAttachToken, '/api/containers')) {
       return Response.json({ error: 'Invalid attachment authorization' }, { status: 400 });
     }
     const ticket = request.headers.get('x-session-ticket');
@@ -139,12 +150,27 @@ export class SSHSessionDO implements DurableObject {
     server.serializeAttachment({ role: 'main', phase: 'waiting' } satisfies MainAttachment);
     this.registerSFTPAttachToken(sftpAttachToken, sftpAttachUrl, server);
     this.registerProcessAttachToken(processAttachToken, processAttachUrl, server);
+    this.registerContainerAttachToken(containerAttachToken, containerAttachUrl, server);
     const deadline = setTimeout(() => this.reject(server, 'Connect message timeout'), 10_000);
     this.deadlines.set(server, deadline);
     return new Response(null, { status: 101, webSocket: client });
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    const containerSession = this.containerSessions.get(ws);
+    if (containerSession || this.isContainerWebSocket(ws)) {
+      try {
+        if (!containerSession || ws.readyState !== WebSocket.OPEN) {
+          this.cleanupContainerWebSocket(ws);
+          if (ws.readyState === WebSocket.OPEN) ws.close(1008, 'Container monitor is unavailable');
+          return;
+        }
+        await containerSession.handleContainerClientMessage(message);
+      } catch (error) {
+        try { ws.send(JSON.stringify({ type: 'container_error', message: error instanceof Error ? error.message : String(error) })); } catch { /* already closed */ }
+      }
+      return;
+    }
     const processSession = this.processSessions.get(ws);
     if (processSession || this.isProcessWebSocket(ws)) {
       try {
@@ -232,6 +258,12 @@ export class SSHSessionDO implements DurableObject {
         processAttach.session = ssh;
         ssh.setProcessAttachUrl(processAttach.attachUrl);
       }
+      const containerToken = this.containerTokenByMainWebSocket.get(ws);
+      const containerAttach = containerToken ? this.containerAttachTokens.get(containerToken) : undefined;
+      if (containerAttach) {
+        containerAttach.session = ssh;
+        ssh.setContainerAttachUrl(containerAttach.attachUrl);
+      }
       this.sessions.set(ws, ssh);
       this.pendingConnections.delete(ws);
       pending.socket = undefined;
@@ -243,13 +275,15 @@ export class SSHSessionDO implements DurableObject {
   }
 
   async webSocketClose(ws: WebSocket): Promise<void> {
-    if (this.isProcessWebSocket(ws)) this.cleanupProcessWebSocket(ws);
+    if (this.isContainerWebSocket(ws)) this.cleanupContainerWebSocket(ws);
+    else if (this.isProcessWebSocket(ws)) this.cleanupProcessWebSocket(ws);
     else if (this.isSFTPWebSocket(ws)) this.cleanupSFTPWebSocket(ws);
     else this.cleanup(ws);
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
-    if (this.isProcessWebSocket(ws)) this.cleanupProcessWebSocket(ws);
+    if (this.isContainerWebSocket(ws)) this.cleanupContainerWebSocket(ws);
+    else if (this.isProcessWebSocket(ws)) this.cleanupProcessWebSocket(ws);
     else if (this.isSFTPWebSocket(ws)) this.cleanupSFTPWebSocket(ws);
     else this.cleanup(ws);
   }
@@ -358,6 +392,77 @@ export class SSHSessionDO implements DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  private attachContainers(request: Request): Response {
+    if (request.method !== 'GET') return Response.json({ error: 'Method not allowed' }, { status: 405 });
+    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+      return Response.json({ error: 'WebSocket upgrade required' }, { status: 426 });
+    }
+    const token = request.headers.get('x-container-attach-token');
+    if (!token || !SFTP_ATTACH_TOKEN_PATTERN.test(token)) {
+      return Response.json({ error: 'Invalid container attachment token' }, { status: 401 });
+    }
+    const attach = this.containerAttachTokens.get(token);
+    if (!attach || attach.mainWebSocket.readyState !== WebSocket.OPEN) {
+      if (attach) this.deleteContainerAttachToken(token, attach);
+      return Response.json({ error: 'Invalid or expired container attachment token' }, { status: 401 });
+    }
+    if (!attach.session) return Response.json({ error: 'SSH session is still initializing' }, { status: 409 });
+    // Token stays valid for the whole SSH session so the client can reconnect
+    // the container monitor after a transient drop, mirroring /processes.
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    this.state.acceptWebSocket(server);
+    server.serializeAttachment({ role: 'container', phase: 'connected' } satisfies ContainerAttachment);
+    this.containerSessions.set(server, attach.session);
+    this.containerOwners.set(server, attach.mainWebSocket);
+    const sockets = this.containerWebSocketsByMain.get(attach.mainWebSocket) ?? new Set<WebSocket>();
+    sockets.add(server);
+    this.containerWebSocketsByMain.set(attach.mainWebSocket, sockets);
+    attach.session.attachContainerWebSocket(server);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  private registerContainerAttachToken(token: string, attachUrl: string, mainWebSocket: WebSocket): void {
+    const attach: AuxiliaryAttachToken = {
+      mainWebSocket,
+      attachUrl,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      timeout: null,
+    };
+    this.containerAttachTokens.set(token, attach);
+    this.containerTokenByMainWebSocket.set(mainWebSocket, token);
+  }
+
+  private deleteContainerAttachToken(token: string, expected?: AuxiliaryAttachToken): void {
+    const attach = this.containerAttachTokens.get(token);
+    if (!attach || (expected && attach !== expected)) return;
+    if (attach.timeout !== null) clearTimeout(attach.timeout);
+    this.containerAttachTokens.delete(token);
+    if (this.containerTokenByMainWebSocket.get(attach.mainWebSocket) === token) {
+      this.containerTokenByMainWebSocket.delete(attach.mainWebSocket);
+    }
+  }
+
+  private cleanupContainerWebSocket(ws: WebSocket): void {
+    const session = this.containerSessions.get(ws);
+    if (!session) return;
+    this.containerSessions.delete(ws);
+    try { session.detachContainerWebSocket(ws); } catch { /* session is already closed */ }
+    const mainWebSocket = this.containerOwners.get(ws);
+    this.containerOwners.delete(ws);
+    if (!mainWebSocket) return;
+    const sockets = this.containerWebSocketsByMain.get(mainWebSocket);
+    sockets?.delete(ws);
+    if (sockets?.size === 0) this.containerWebSocketsByMain.delete(mainWebSocket);
+  }
+
+  private isContainerWebSocket(ws: WebSocket): boolean {
+    if (this.containerSessions.has(ws)) return true;
+    const attachment = ws.deserializeAttachment() as Attachment | null;
+    return attachment?.role === 'container';
+  }
+
   private registerSFTPAttachToken(token: string, attachUrl: string, mainWebSocket: WebSocket): void {
     // The SFTP token intentionally lives for the lifetime of the main SSH
     // session (it is removed in cleanup() when that session closes). This
@@ -410,7 +515,7 @@ export class SSHSessionDO implements DurableObject {
     }
   }
 
-  private isValidAttachUrl(value: string, token: string, pathname: '/api/sftp' | '/api/processes'): boolean {
+  private isValidAttachUrl(value: string, token: string, pathname: '/api/sftp' | '/api/processes' | '/api/containers'): boolean {
     if (value.length > 2048) return false;
     try {
       const url = new URL(value, 'https://session.invalid');
@@ -482,6 +587,8 @@ export class SSHSessionDO implements DurableObject {
     if (token) this.deleteSFTPAttachToken(token);
     const processToken = this.processTokenByMainWebSocket.get(ws);
     if (processToken) this.deleteProcessAttachToken(processToken);
+    const containerToken = this.containerTokenByMainWebSocket.get(ws);
+    if (containerToken) this.deleteContainerAttachToken(containerToken);
     const sftpWebSockets = this.sftpWebSocketsByMain.get(ws);
     if (sftpWebSockets) {
       for (const sftpWebSocket of [...sftpWebSockets]) {
@@ -497,6 +604,14 @@ export class SSHSessionDO implements DurableObject {
         try { processWebSocket.close(1000, 'SSH session closed'); } catch { /* already closed */ }
       }
       this.processWebSocketsByMain.delete(ws);
+    }
+    const containerWebSockets = this.containerWebSocketsByMain.get(ws);
+    if (containerWebSockets) {
+      for (const containerWebSocket of [...containerWebSockets]) {
+        this.cleanupContainerWebSocket(containerWebSocket);
+        try { containerWebSocket.close(1000, 'SSH session closed'); } catch { /* already closed */ }
+      }
+      this.containerWebSocketsByMain.delete(ws);
     }
     const pending = this.pendingConnections.get(ws);
     if (pending) {

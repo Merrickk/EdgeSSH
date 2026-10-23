@@ -106,7 +106,8 @@ test('多文件上传按队列依次传输', async ({ page }) => {
     { name: 'a.txt', mimeType: 'text/plain', buffer: a },
     { name: 'b.txt', mimeType: 'text/plain', buffer: b },
   ]);
-  await expect(page.locator('.files-list')).toContainText('b.txt');
+  // 队列排空后目录才刷新，列表最终应包含两个新文件。
+  await expect(page.locator('.files-list')).toContainText('b.txt', { timeout: 15_000 });
   const starts = fixture.calls
     .filter((call) => call.type === 'sftp_upload_start')
     .map((call) => call.path);
@@ -154,7 +155,9 @@ test('预览文本文件并查看属性', async ({ page }) => {
   await page.locator('#file-preview-dismiss').click();
   await expect(page.locator('#file-preview-dialog')).toBeHidden();
 
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  // 预览对话框关闭后重新定位菜单按钮，避免用到过期坐标。
+  const reopen = (await row.locator('.files-list-menu').boundingBox())!;
+  await page.mouse.click(reopen.x + reopen.width / 2, reopen.y + reopen.height / 2);
   await page.locator('[data-file-sheet="properties"]').click();
   await expect(page.locator('#file-properties-dialog')).toBeVisible();
   const list = page.locator('#file-properties-list');
@@ -164,4 +167,77 @@ test('预览文本文件并查看属性', async ({ page }) => {
   await expect(list).toContainText('root');
   await page.locator('#file-properties-dismiss').click();
   await expect(page.locator('#file-properties-dialog')).toBeHidden();
+});
+
+test('文本文件可读入编辑并保存回远端', async ({ page }) => {
+  const fixture = await fileFixture(page);
+  await connectFiles(page);
+  const row = page.locator('.files-list').getByRole('treeitem', { name: 'nginx.conf' });
+  await row.click();
+  const box = (await row.locator('.files-list-menu').boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator('#file-action-sheet')).toBeVisible();
+
+  // 白名单内的配置文件才出现“编辑”，图片/压缩包不会。
+  await expect(page.locator('[data-file-sheet="edit"]')).toBeEnabled();
+  await page.locator('[data-file-sheet="edit"]').click();
+  await expect(page.locator('#file-action-sheet')).toBeHidden();
+
+  const dialog = page.locator('#file-editor-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(page.locator('#file-editor-path')).toHaveText('/root/nginx.conf');
+  await expect(page.locator('#file-editor-area')).toHaveValue('server {\n  listen 80;\n}\n');
+  await expect(page.locator('#file-editor-save')).toBeDisabled();
+
+  await page.locator('#file-editor-area').fill('server {\n  listen 8080;\n}\n');
+  await expect(page.locator('#file-editor-save')).toBeEnabled();
+  await expect(page.locator('#file-editor-cancel')).toBeVisible();
+
+  await page.locator('#file-editor-save').click();
+  await expect(page.locator('#file-editor-status')).toHaveText('已保存');
+  await expect(page.locator('#file-editor-save')).toBeDisabled();
+  // 保存走的是上传通道，字节必须原样落到远端。
+  expect(Buffer.concat(fixture.uploaded).toString('utf8')).toBe('server {\n  listen 8080;\n}\n');
+  expect(fixture.calls).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'sftp_upload_start', path: '/root/nginx.conf' }),
+  ]));
+
+  // 放弃修改还原为上次保存的内容。
+  await page.locator('#file-editor-area').fill('broken');
+  await page.locator('#file-editor-cancel').click();
+  await expect(page.locator('#file-editor-area')).toHaveValue('server {\n  listen 8080;\n}\n');
+  await expect(page.locator('#file-editor-status')).toHaveText('已放弃修改');
+
+  await page.locator('#file-editor-dismiss').click();
+  await expect(dialog).toBeHidden();
+});
+
+test('编辑器只接受文本白名单，未保存时关闭需确认', async ({ page }) => {
+  const fixture = await fileFixture(page);
+  await connectFiles(page);
+  const row = page.locator('.files-list').getByRole('treeitem', { name: 'backups' });
+  await row.click();
+  const box = (await row.locator('.files-list-menu').boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator('[data-file-sheet="edit"]')).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#file-action-sheet')).toBeHidden();
+
+  await page.locator('.files-list').getByRole('treeitem', { name: 'README.md' }).click();
+  const readme = (await page.locator('.files-list').getByRole('treeitem', { name: 'README.md' }).locator('.files-list-menu').boundingBox())!;
+  await page.mouse.click(readme.x + readme.width / 2, readme.y + readme.height / 2);
+  await page.locator('[data-file-sheet="edit"]').click();
+  await expect(page.locator('#file-editor-dialog')).toBeVisible();
+  await expect(page.locator('#file-editor-area')).toHaveValue('hello files\n');
+
+  await page.locator('#file-editor-area').fill('changed\n');
+  // 有改动时 Escape 不直接关闭，取消确认后编辑器保持打开。
+  page.once('dialog', (dialog) => dialog.dismiss());
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#file-editor-dialog')).toBeVisible();
+  // 确认后关闭，且不会把改动写回远端。
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#file-editor-dialog')).toBeHidden();
+  expect(fixture.calls.filter((call) => call.type === 'sftp_upload_start')).toHaveLength(0);
 });

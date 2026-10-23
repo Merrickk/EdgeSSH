@@ -57,18 +57,24 @@ async function sshUpgrade(request: Request, env: Env, accountId: string): Promis
   headers.delete('Authorization');
   const sftpAttachToken = crypto.randomUUID();
   const processAttachToken = crypto.randomUUID();
+  const containerAttachToken = crypto.randomUUID();
   const sftpAttachUrl = new URL('/api/sftp', 'https://session.invalid');
   sftpAttachUrl.searchParams.set('session', id.toString());
   sftpAttachUrl.searchParams.set('token', sftpAttachToken);
   const processAttachUrl = new URL('/api/processes', 'https://session.invalid');
   processAttachUrl.searchParams.set('session', id.toString());
   processAttachUrl.searchParams.set('token', processAttachToken);
+  const containerAttachUrl = new URL('/api/containers', 'https://session.invalid');
+  containerAttachUrl.searchParams.set('session', id.toString());
+  containerAttachUrl.searchParams.set('token', containerAttachToken);
   headers.set('x-session-ticket', ticket);
   headers.set('x-client-ip', clientAddress(request));
   headers.set('x-sftp-attach-token', sftpAttachToken);
   headers.set('x-sftp-attach-url', `${sftpAttachUrl.pathname}${sftpAttachUrl.search}`);
   headers.set('x-process-attach-token', processAttachToken);
   headers.set('x-process-attach-url', `${processAttachUrl.pathname}${processAttachUrl.search}`);
+  headers.set('x-container-attach-token', containerAttachToken);
+  headers.set('x-container-attach-url', `${containerAttachUrl.pathname}${containerAttachUrl.search}`);
   const response = await env.SSH_SESSIONS.get(id).fetch(new Request('https://session.internal/connect', { headers }));
   if (response.status === 401) return jsonError('Invalid, expired, or already used session ticket', 401);
   return response;
@@ -96,6 +102,31 @@ async function sftpUpgrade(request: Request, env: Env, accountId: string): Promi
     headers,
   }));
   if (response.status === 401) return jsonError('Invalid, expired, or already used SFTP attachment token', 401);
+  return response;
+}
+
+async function containerUpgrade(request: Request, env: Env, accountId: string): Promise<Response> {
+  if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return jsonError('WebSocket upgrade required', 426);
+  if (!hasValidWebSocketOrigin(request)) return jsonError('WebSocket origin is not allowed', 403);
+  const url = new URL(request.url);
+  const sessionId = url.searchParams.get('session');
+  const token = url.searchParams.get('token');
+  if (!sessionId || !token) return jsonError('Missing container attachment authorization', 401);
+  let id: DurableObjectId;
+  try { id = env.SSH_SESSIONS.idFromString(sessionId); } catch { return jsonError('Invalid session identifier', 401); }
+  const headers = new Headers(request.headers);
+  headers.set('x-account-id', accountId);
+  headers.delete('Cookie');
+  headers.delete('Authorization');
+  headers.delete('x-session-ticket');
+  headers.delete('x-client-ip');
+  headers.delete('x-container-attach-url');
+  headers.set('x-container-attach-token', token);
+  const response = await env.SSH_SESSIONS.get(id).fetch(new Request('https://session.internal/containers', {
+    method: 'GET',
+    headers,
+  }));
+  if (response.status === 401) return jsonError('Invalid or expired container attachment token', 401);
   return response;
 }
 
@@ -179,6 +210,10 @@ export default {
       if (url.pathname === '/api/processes') {
         if (request.method !== 'GET') return corsResponse(jsonError('Method not allowed', 405));
         return corsResponse(await processUpgrade(request, env, account!.id));
+      }
+      if (url.pathname === '/api/containers') {
+        if (request.method !== 'GET') return corsResponse(jsonError('Method not allowed', 405));
+        return corsResponse(await containerUpgrade(request, env, account!.id));
       }
       if (isApiRequest) return corsResponse(jsonError('Not found', 404));
       if (!env.ASSETS) return jsonError('Static assets binding is not configured', 503);

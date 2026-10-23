@@ -43,7 +43,7 @@ interface ProcessEntry {
 type ProcessSortKey = 'pid' | 'user' | 'memoryBytes' | 'memoryPercent' | 'cpuPercent' | 'state' | 'time' | 'command';
 type SortDirection = 'ascending' | 'descending';
 
-interface ProcessSnapshot {
+export interface ProcessSnapshot {
   type: 'process_snapshot';
   metrics: {
     cpuPercent: number | null;
@@ -94,6 +94,8 @@ interface ProcessManagerOptions {
   // selected interface is the baseline (rate shows zero) and the next one
   // starts drawing the sparkline.
   onNetworkSample?: (samples: NetworkSample[] | null, timestamp: number) => void;
+  /** 每次收到校验过的快照后触发，供总览卡片缓存主机指标。 */
+  onSnapshot?: (snapshot: ProcessSnapshot) => void;
 }
 
 const MAX_PROCESSES = 512;
@@ -209,6 +211,7 @@ export class ProcessManager {
   private readonly onReconnect: ((zh: string, en: string) => void) | undefined;
   private readonly onToast: ((zh: string, en: string, kind: 'info' | 'error') => void) | undefined;
   private readonly onNetworkSample: ((samples: NetworkSample[] | null, timestamp: number) => void) | undefined;
+  private readonly onSnapshot: ((snapshot: ProcessSnapshot) => void) | undefined;
   private socket: WebSocket | null = null;
   private generation = 0;
   private snapshot: ProcessSnapshot | null = null;
@@ -235,6 +238,7 @@ export class ProcessManager {
     this.onReconnect = options.onReconnect;
     this.onToast = options.onToast;
     this.onNetworkSample = options.onNetworkSample;
+    this.onSnapshot = options.onSnapshot;
     this.elements.panel.addEventListener('click', (event) => {
       const target = event.target as HTMLElement;
       const sortButton = target.closest<HTMLButtonElement>('[data-process-sort]');
@@ -419,6 +423,7 @@ export class ProcessManager {
       // The callback is invoked even when network is null so the frontend
       // can decide whether to hide the block on its own.
       this.onNetworkSample?.(message.metrics.network, message.timestamp);
+      this.onSnapshot?.(message);
       return;
     }
     if (!message || typeof message !== 'object' || Array.isArray(message)) return;

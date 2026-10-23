@@ -1,0 +1,86 @@
+/* 独立容器页：与文件页同一套白橙主题与紧凑度量。 */
+body[data-view='containers'] { height: auto; min-height: 100%; overflow-y: auto; background: var(--home-bg); }
+body[data-view='containers'] {
+  --surface: var(--home-surface);
+  --surface-2: var(--home-bg);
+  --surface-3: var(--home-line);
+  --panel: var(--home-surface);
+  --border: var(--home-line);
+  --border-soft: var(--home-line);
+  --text: var(--home-ink);
+  --muted: var(--home-muted);
+  --muted-2: var(--home-muted);
+  --accent: var(--home-accent-hover);
+  --accent-dim: var(--home-accent-soft);
+  --danger: var(--home-danger);
+  --danger-dim: var(--home-accent-soft);
+  --warning: var(--home-accent-hover);
+  --sans: var(--home-font);
+  --mono: var(--home-mono);
+}
+
+.containers-page {
+  min-width: 0; width: 100%; max-width: 1700px; margin-inline: auto;
+  padding: 24px 32px 20px; display: flex; flex-direction: column; gap: 14px;
+}
+.containers-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.containers-heading h1 { margin: 0; font-size: 26px; line-height: 1.25; letter-spacing: -.8px; }
+.containers-heading p:last-child { margin: 4px 0 0; color: var(--home-muted); font-size: 13px; }
+.containers-connection { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--home-line); border-radius: 10px; background: var(--home-surface); }
+.containers-host-icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 9px; background: var(--home-accent-soft); color: var(--home-accent-hover); flex-shrink: 0; }
+.containers-host-icon svg { width: 20px; height: 20px; }
+.containers-host-field { display: flex; flex-direction: column; gap: 4px; flex: 1; max-width: 510px; min-width: 0; color: var(--home-muted); font-size: 12px; }
+.containers-host-field > span { line-height: 1.2; }
+#dashboard .containers-host-field select { width: 100%; min-width: 0; height: 34px; padding: 0 32px 0 12px; color: var(--home-ink); background: var(--home-bg); border: 1px solid var(--home-line); border-radius: 6px; font: 12px var(--home-mono); }
+#containers-connect { min-width: 104px; align-self: flex-end; }
+.containers-connection-meta { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; font-size: 12px; color: var(--home-muted); text-align: right; }
+.containers-state { display: inline-flex; align-items: center; gap: 7px; color: var(--home-muted); font-weight: 600; }
+.containers-state::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.containers-state[data-state='connected'] { color: var(--home-success); }
+.containers-state[data-state='error'] { color: var(--home-danger); }
+.containers-state[data-state='connecting'] { color: var(--home-accent-hover); }
+.containers-notice { margin: 0; padding: 10px 14px; border-left: 3px solid var(--home-accent); background: var(--home-accent-soft); color: var(--home-ink); font-size: 13px; overflow-wrap: anywhere; }
+.containers-notice.error { color: var(--home-danger); border-color: var(--home-danger); }
+.containers-browser { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--home-line); border-radius: 10px; overflow: hidden; background: var(--home-surface); }
+.containers-browser-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 7px 14px; border-bottom: 1px solid var(--home-line); }
+.containers-browser-heading strong { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; }
+.containers-browser-heading strong svg { width: 17px; height: 17px; color: var(--home-accent-hover); }
+.containers-browser-heading > span { color: var(--home-muted); font: 10px var(--home-mono); }
+/* 让列表面板吃掉剩余高度：页面自身不滚动，表格自己滚。 */
+.containers-panel-slot { display: grid; min-width: 0; flex: 1 1 auto; height: clamp(320px, calc(100dvh - 380px), 900px); }
+.containers-page .container-summary-item { padding: 8px 14px; font-size: 11px; }
+.containers-page .container-summary-item strong { font-size: 15px; }
+.containers-page .container-table th { height: 32px; padding-inline: 12px; font-size: 11px; }
+.containers-page .container-table td { height: 36px; padding-inline: 12px; font-size: 12px; }
+.containers-page .container-action { min-width: 48px; height: 28px; font-size: 12px; }
+.containers-page .container-manager-state { font-size: 14px; line-height: 1.8; }
+.containers-page .container-statusbar { min-height: 28px; padding: 5px 12px; font-size: 10px; }
+.containers-footer { display: flex; justify-content: space-between; gap: 12px; color: var(--home-muted); font-size: 11px; }
+body[data-view='containers'] #dashboard .home-search, body[data-view='containers'] #dashboard .header-add { display: none; }
+body[data-view='containers'] .home-account { margin-left: auto; }
+@media (max-width: 1100px) {
+  .containers-page { padding: 24px; }
+  .containers-connection { flex-wrap: wrap; }
+  .containers-connection-meta { flex-basis: 100%; flex-direction: row; align-items: center; justify-content: space-between; }
+}
+@media (max-width: 600px) {
+  .containers-page { padding: 20px 12px; gap: 16px; }
+  .containers-heading { align-items: flex-start; }
+  .containers-heading h1 { font-size: 25px; }
+  .containers-heading p:last-child { font-size: 12px; }
+  #dashboard #containers-terminal { min-height: 44px; padding-inline: 10px; font-size: 12px; }
+  .containers-connection { padding: 14px; gap: 12px; }
+  .containers-host-icon { display: none; }
+  .containers-host-field { flex-basis: calc(100% - 116px); }
+  #dashboard .containers-host-field select { height: 44px; font-size: 16px; }
+  #containers-connect { min-height: 44px; }
+  .containers-connection-meta { align-items: flex-start; text-align: left; font-size: 11px; }
+  .containers-connection-meta > span:last-child { max-width: 65%; }
+  .containers-browser-heading { padding: 14px 12px; }
+  .containers-browser-heading > span { font-size: 10px; }
+  .containers-panel-slot { height: min(76dvh, 680px); }
+  .containers-footer { flex-direction: column; gap: 6px; }
+  #dashboard .home-rail { gap: 4px; padding-inline: 8px; justify-content: space-between; }
+  #dashboard .rail-item { padding-inline: 8px; font-size: 11px; }
+  #dashboard .rail-item svg { width: 18px; height: 18px; }
+}

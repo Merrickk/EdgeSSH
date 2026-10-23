@@ -70,6 +70,26 @@ body[data-view='dashboard'] { overflow-y: auto; background: var(--home-bg); }
 #dashboard .host-filters button.active { color: var(--home-ink); border-color: var(--home-accent); }
 .host-list { min-height: 282px; max-height: 480px; overflow-y: auto; scrollbar-width: thin; }
 .host-group-heading { font-size: 12px; font-weight: 650; margin: 18px 0 9px; color: var(--home-muted); }
+/* komari 风格主机卡片：头部信息 + 四条指标带 + 操作行。 */
+.host-card { display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--home-line); border-radius: 10px; margin-bottom: 12px; padding: 14px 16px; background: var(--home-surface); transition: border-color 140ms ease, box-shadow 140ms ease; }
+.host-card:hover { border-color: color-mix(in srgb, var(--home-accent) 45%, var(--home-line)); box-shadow: 0 6px 20px var(--home-shadow); }
+.host-card-body { display: grid; grid-template-columns: 40px minmax(0, 1fr) 190px; align-items: center; gap: 12px; }
+.host-card-actions { display: flex; align-items: center; gap: 8px; padding-top: 10px; border-top: 1px solid var(--home-line); }
+.host-card-actions .connect-host { margin-right: auto; }
+
+/* 指标带：四列等宽，每条 = 标签+数值 / 进度条 / 用量副标题。 */
+.host-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.host-metric { min-width: 0; }
+.host-metric-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--home-muted); }
+.host-metric-head strong { font-size: 12px; font-weight: 650; color: var(--home-ink); font-variant-numeric: tabular-nums; }
+.host-metric-bar { position: relative; height: 4px; margin: 5px 0 4px; border-radius: 999px; background: var(--home-line); overflow: hidden; }
+.host-metric-bar > i { position: absolute; inset: 0 auto 0 0; display: block; border-radius: inherit; background: var(--home-accent); transition: width 240ms ease; }
+.host-metric-bar > i[data-metric='cpu'] { background: #f4511e; }
+.host-metric-bar > i[data-metric='memory'] { background: #2563eb; }
+.host-metric-bar > i[data-metric='disk'] { background: #0b7a4b; }
+.host-metric-bar > i[data-metric='network'] { background: #7c3aed; }
+.host-metric > small { display: block; font-size: 10px; color: var(--home-muted); font-family: var(--home-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .host-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) 190px auto auto 24px; align-items: center; gap: 10px; border: 1px solid var(--home-line); border-radius: 8px; margin-bottom: 9px; padding: 14px 12px; background: var(--home-surface); }
 .host-row:hover { border-color: var(--home-accent); background: var(--home-accent-soft); }
 .host-symbol { display: grid; place-items: center; border-radius: 8px; background: var(--home-bg); width: 36px; height: 36px; color: var(--home-muted); overflow: hidden; }
@@ -188,6 +208,12 @@ body[data-view='dashboard'] { overflow-y: auto; background: var(--home-bg); }
   .home-eyebrow { font-size: 9px; }
   #dashboard .home-section-heading .home-button { font-size: 12px; padding-inline: 10px; }
   .host-filters { gap: 12px; }
+  /* 窄屏卡片：位置信息收起，指标带改两列，操作行自动换行。 */
+  .host-card { padding: 12px; gap: 10px; }
+  .host-card-body { grid-template-columns: 32px minmax(0, 1fr); gap: 9px; }
+  .host-card-body .host-location { display: none; }
+  .host-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
+  .host-card-actions { flex-wrap: wrap; }
   .host-row { grid-template-columns: 28px minmax(0, 1fr) auto 30px; gap: 7px; padding: 11px 9px; }
   .host-row .host-row-action:not(.delete) { grid-row: 2; grid-column: 3; }
   .host-row .host-row-action.delete { grid-column: 4; }

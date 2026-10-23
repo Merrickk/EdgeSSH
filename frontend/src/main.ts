@@ -6,13 +6,16 @@ import { historyKey, historyLabel } from './history';
 import { listHosts, hostCredentials, saveHost, removeHost, updateHostSystem, type CloudHost, type Credentials, type HostSystemInfo } from './cloud-api';
 import { Dashboard } from './dashboard';
 import { FilePage } from './file-page';
+import { ContainerPage } from './container-page';
 import { Snippets } from './snippets';
 import { resolveConnectionControl, resolveConnectionPanel } from './ui-state';
 import { classifyHostKey, SSH_FINGERPRINT_RE, type HostKeyPrompt } from './host-key';
 import { FileManager, collectFileManagerElements } from './file-manager';
 import { FileTree } from './file-tree';
-import { ProcessManager, collectProcessManagerElements, type NetworkSample } from './process-manager';
+import { ProcessManager, collectProcessManagerElements, type NetworkSample, type ProcessSnapshot } from './process-manager';
+import { ContainerManager, collectContainerManagerElements } from './container-manager';
 import { resetTerminalForConnection } from './terminal-session';
+import { writeHostSnapshot, type HostSnapshot } from './host-metrics';
 import { createTerminalTools, type TerminalToolsController } from './terminal-tools';
 import { WebSocketReconnectManager } from './ws-reconnect';
 import type { ReconnectLogEntry } from './ws-reconnect';
@@ -298,6 +301,7 @@ const ui = {
   fileTreeScrim: element<HTMLButtonElement>('file-tree-scrim'),
   filePreviewDialog: element<HTMLDialogElement>('file-preview-dialog'),
   filePropertiesDialog: element<HTMLDialogElement>('file-properties-dialog'),
+  fileEditorDialog: element<HTMLDialogElement>('file-editor-dialog'),
   terminalStage: element<HTMLElement>('terminal-stage'),
   terminalElement: element<HTMLElement>('terminal'),
   terminalEmpty: element<HTMLElement>('terminal-empty'),
@@ -314,6 +318,10 @@ const ui = {
   fileTree: element<HTMLElement>('file-tree'),
   processManagerTab: element<HTMLButtonElement>('process-manager-tab'),
   processManagerPanel: element<HTMLElement>('process-manager-panel'),
+  containerManagerTab: element<HTMLButtonElement>('container-manager-tab'),
+  containerManagerPanel: element<HTMLElement>('container-manager-panel'),
+  containerLogDialog: element<HTMLDialogElement>('container-log-dialog'),
+  containerConfirmDialog: element<HTMLDialogElement>('container-confirm-dialog'),
   eventToggle: element<HTMLButtonElement>('event-toggle'),
   dockCollapse: element<HTMLButtonElement>('dock-collapse'),
   eventLogContainer: element<HTMLElement>('event-log-container'),
@@ -397,6 +405,7 @@ function applyLanguage(language: Language, persist = false): void {
 let profiles: SavedProfile[] = [];
 let dashboard: Dashboard | undefined;
 let filePage: FilePage | undefined;
+let containerPage: ContainerPage | undefined;
 let hostKeys: Record<string, string> = {};
 let socket: WebSocket | null = null;
 let connectionState: ConnectionState = 'idle';
@@ -431,6 +440,7 @@ let panelOpen = false;
 let fileManager: FileManager;
 let fileTree: FileTree;
 let processManager: ProcessManager;
+let containerManager: ContainerManager;
 let terminalTools: TerminalToolsController | undefined;
 let sshReconnectManager: WebSocketReconnectManager | null = null;
 let currentCfAccessClientId = '';
@@ -454,6 +464,8 @@ let reconnectParams: {
 const NET_SPARK_POINTS = 60;
 const netSpark = new Float32Array(NET_SPARK_POINTS);
 let netSparkIdx = 0;
+/** 最近一次网络采样换算出的上下行速率，供总览卡片快照使用。 */
+let latestNetworkRate: { up: number; down: number } | null = null;
 let netSparkFilled = 0;
 const netBaselines = new Map<string, { rx: number; tx: number; ts: number }>();
 let netIfaceList: string[] = [];
@@ -643,10 +655,12 @@ function updateNetworkMetric(samples: NetworkSample[] | null, timestamp: number)
   // `↑` = upload (tx), `↓` = download (rx) — match the toolbar arrow convention.
   ui.resourceNetworkRateUp.textContent = `↑ ${formatNetworkRate(txRate)}`;
   ui.resourceNetworkRateDown.textContent = `↓ ${formatNetworkRate(rxRate)}`;
+  latestNetworkRate = { up: txRate, down: rxRate };
   updateNetworkIfaceLabel();
 }
 
 function resetNetworkMetric(): void {
+  latestNetworkRate = null;
   // Idempotent: only touch the DOM / state if the block is currently visible
   // or still carries live state, so repeated resets (one per
   // processManager.reset() call site) are cheap.
@@ -710,7 +724,32 @@ processManager = new ProcessManager({
   onReconnect: (zh, en) => event(bilingual(zh, en), 'process'),
   onToast: (zh, en, kind) => toast(bilingual(zh, en), kind),
   onNetworkSample: (sample, timestamp) => updateNetworkMetric(sample, timestamp),
+  // 总览卡片用最近一次连接的快照充数；SSH 是按需连接，没有常驻探针。
+  onSnapshot: (snapshot) => recordHostSnapshot(snapshot),
 });
+
+containerManager = new ContainerManager({
+  elements: collectContainerManagerElements(),
+  getLanguage: () => currentLanguage,
+  onError: (message) => event(message, 'container', true),
+  onStatus: (message) => event(message, 'container'),
+  onToast: (zh, en, kind) => toast(bilingual(zh, en), kind),
+});
+
+/** 把进程监控快照折算成总览卡片指标并缓存。 */
+function recordHostSnapshot(snapshot: ProcessSnapshot): void {
+  const host = profiles.find((item) => passwordContext(item) === currentTargetKey);
+  if (!host) return;
+  const cpu = snapshot.metrics.cpuPercent;
+  const memory = snapshot.metrics.memory;
+  if (cpu === null && !memory) return;
+  const next: HostSnapshot = {};
+  if (cpu !== null) next.cpu = { percent: cpu, used: 0, total: 0 };
+  if (memory) next.memory = { percent: memory.percent, used: memory.usedBytes, total: memory.totalBytes };
+  const rate = latestNetworkRate;
+  if (rate) next.network = { percent: 0, used: 0, total: 0, rate };
+  writeHostSnapshot(host.id, next);
+}
 
 function terminalTheme(): Record<string, string> {
   return {
@@ -1136,6 +1175,7 @@ function setState(state: ConnectionState, label?: string): void {
   connectionState = state;
   ui.fullscreenFiles.disabled = state !== 'connected';
   filePage?.setConnection(state, profiles.find((profile) => passwordContext(profile) === currentTargetKey)?.id, currentTargetLabel);
+  containerPage?.setConnection(state, profiles.find((profile) => passwordContext(profile) === currentTargetKey)?.id);
   const stateLabel = label ?? ({
     idle: bilingual('离线', 'Offline'),
     connecting: bilingual('连接中', 'Connecting'),
@@ -1336,7 +1376,7 @@ function sendHostKeyDecision(accept: boolean): void {
     : bilingual('主机密钥已拒绝。', 'Host key rejected.'), 'host-key', !accept);
 }
 
-type WorkspaceTab = 'files' | 'processes' | 'log';
+type WorkspaceTab = 'files' | 'processes' | 'containers' | 'log';
 let activeWorkspaceTab: WorkspaceTab | null = null;
 
 /* -------------------------------------------------------------------------
@@ -1416,11 +1456,13 @@ function setTreeDrawer(open: boolean): void {
 function setWorkspaceTab(tab: WorkspaceTab | null, focus = false, rovingTab = tab ?? activeWorkspaceTab ?? 'files'): void {
   const filesActive = tab === 'files';
   const processesActive = tab === 'processes';
+  const containersActive = tab === 'containers';
   const logActive = tab === 'log';
   activeWorkspaceTab = tab;
   ui.terminalCard.classList.toggle('workspace-panel-open', tab !== null);
   ui.fileManagerPanel.hidden = !filesActive;
   ui.processManagerPanel.hidden = !processesActive;
+  ui.containerManagerPanel.hidden = !containersActive;
   ui.eventLogContainer.hidden = !logActive;
   ui.dockCollapse.hidden = tab === null;
   ui.dockMaximize.hidden = tab === null;
@@ -1432,19 +1474,31 @@ function setWorkspaceTab(tab: WorkspaceTab | null, focus = false, rovingTab = ta
   }
   ui.fileManagerTab.setAttribute('aria-selected', String(filesActive));
   ui.processManagerTab.setAttribute('aria-selected', String(processesActive));
+  ui.containerManagerTab.setAttribute('aria-selected', String(containersActive));
   ui.eventToggle.setAttribute('aria-selected', String(logActive));
   ui.fileManagerTab.setAttribute('aria-expanded', String(filesActive));
   ui.processManagerTab.setAttribute('aria-expanded', String(processesActive));
+  ui.containerManagerTab.setAttribute('aria-expanded', String(containersActive));
   ui.eventToggle.setAttribute('aria-expanded', String(logActive));
   ui.fileManagerTab.tabIndex = rovingTab === 'files' ? 0 : -1;
   ui.processManagerTab.tabIndex = rovingTab === 'processes' ? 0 : -1;
+  ui.containerManagerTab.tabIndex = rovingTab === 'containers' ? 0 : -1;
   ui.eventToggle.tabIndex = rovingTab === 'log' ? 0 : -1;
   if (logActive) requestAnimationFrame(() => { ui.eventLog.scrollTop = ui.eventLog.scrollHeight; });
-  if (focus) ({ files: ui.fileManagerTab, processes: ui.processManagerTab, log: ui.eventToggle })[rovingTab].focus();
+  if (focus) workspaceTabButtons()[rovingTab].focus();
   requestAnimationFrame(() => {
     applyDockRatio();
     fitTerminal(true);
   });
+}
+
+function workspaceTabButtons(): Record<WorkspaceTab, HTMLButtonElement> {
+  return {
+    files: ui.fileManagerTab,
+    processes: ui.processManagerTab,
+    containers: ui.containerManagerTab,
+    log: ui.eventToggle,
+  };
 }
 
 function toggleWorkspaceTab(tab: WorkspaceTab): void {
@@ -1454,8 +1508,9 @@ function toggleWorkspaceTab(tab: WorkspaceTab): void {
 function handleWorkspaceTabKey(event: KeyboardEvent): void {
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
   event.preventDefault();
-  const tabs: WorkspaceTab[] = ['files', 'processes', 'log'];
-  const current = tabs.findIndex((tab) => ({ files: ui.fileManagerTab, processes: ui.processManagerTab, log: ui.eventToggle })[tab] === event.currentTarget);
+  const tabs: WorkspaceTab[] = ['files', 'processes', 'containers', 'log'];
+  const buttons = workspaceTabButtons();
+  const current = tabs.findIndex((tab) => buttons[tab] === event.currentTarget);
   const next = event.key === 'Home' ? 0
     : event.key === 'End' ? tabs.length - 1
       : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
@@ -1538,6 +1593,20 @@ function handleServerMessage(message: ServerMessage): void {
       return;
     }
     event(bilingual('进程监控通道已可用。', 'Process monitor channel is available.'), 'process');
+    return;
+  }
+  if (type === 'container_attach') {
+    if (typeof message.url !== 'string' || !message.url.startsWith('/api/containers?')) {
+      event(bilingual('收到无效的容器监控连接信息。', 'Received invalid container-monitor connection details.'), 'protocol', true);
+      return;
+    }
+    try {
+      containerManager.attach(message.url);
+    } catch {
+      event(bilingual('无法打开容器监控连接。', 'Could not open the container-monitor connection.'), 'container', true);
+      return;
+    }
+    event(bilingual('容器监控通道已可用。', 'Container monitor channel is available.'), 'container');
     return;
   }
   if (type === 'host_key') {
@@ -1666,6 +1735,7 @@ function failActiveConnection(activeSocket: WebSocket | null, closeReason: strin
   fileManager.reset();
   fileTree?.setReady(false);
   processManager.reset();
+  containerManager.reset();
   resetNetworkMetric();
   clearHostKeyPrompt();
   invalidateHistoryPasswordLoad();
@@ -1789,6 +1859,7 @@ function handleSshReconnectLog(entry: ReconnectLogEntry): void {
     fileManager.reset();
     fileTree?.setReady(false);
     processManager.reset();
+    containerManager.reset();
   } else if (entry.event === 'reconnect_attempt') {
     updateConnectionStatus(localized(
       `正在重连 SSH（${entry.attempt}/${entry.maxAttempts}）…`,
@@ -1814,7 +1885,9 @@ async function connect(): Promise<void> {
     showFormError(validationError);
     return;
   }
-  if (document.body.dataset.view !== 'files') dashboard?.openWorkspace();
+  // 独立页（文件 / 容器）连接后停在原页，只有从总览或工作台发起的连接才切到工作台。
+  const standaloneView = document.body.dataset.view;
+  if (standaloneView !== 'files' && standaloneView !== 'containers') dashboard?.openWorkspace();
   if (location.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
     showFormError(bilingual('发送 SSH 凭据前必须使用 HTTPS。', 'HTTPS is required before SSH credentials can be sent.'));
     return;
@@ -1969,6 +2042,7 @@ async function connect(): Promise<void> {
       fileManager.reset();
       fileTree?.setReady(false);
       processManager.reset();
+      containerManager.reset();
       resetNetworkMetric();
       clearHostKeyPrompt();
       invalidateHistoryPasswordLoad();
@@ -2023,6 +2097,7 @@ function disconnect(reason = bilingual('已由用户断开连接', 'Disconnected
   fileManager.reset();
   fileTree?.setReady(false);
   processManager.reset();
+  containerManager.reset();
   resetNetworkMetric();
   clearHostKeyPrompt();
   invalidateHistoryPasswordLoad();
@@ -2283,6 +2358,7 @@ document.addEventListener('fullscreenchange', () => {
 });
 ui.fileManagerTab.addEventListener('click', () => toggleWorkspaceTab('files'));
 ui.processManagerTab.addEventListener('click', () => toggleWorkspaceTab('processes'));
+ui.containerManagerTab.addEventListener('click', () => toggleWorkspaceTab('containers'));
 ui.eventToggle.addEventListener('click', () => toggleWorkspaceTab('log'));
 ui.eventMessage.addEventListener('click', () => toggleWorkspaceTab('log'));
 ui.dockCollapse.addEventListener('click', () => setWorkspaceTab(null));
@@ -2404,6 +2480,7 @@ document.querySelector<HTMLAnchorElement>('#app .brand')?.addEventListener('clic
 });
 ui.fileManagerTab.addEventListener('keydown', handleWorkspaceTabKey);
 ui.processManagerTab.addEventListener('keydown', handleWorkspaceTabKey);
+ui.containerManagerTab.addEventListener('keydown', handleWorkspaceTabKey);
 ui.eventToggle.addEventListener('keydown', handleWorkspaceTabKey);
 ui.languageToggle.addEventListener('click', () => {
   applyLanguage(currentLanguage === 'zh-CN' ? 'en' : 'zh-CN', true);
@@ -2441,6 +2518,7 @@ window.addEventListener('beforeunload', () => {
   fileTree?.setReady(false);
   fileTree?.destroy();
   processManager.reset();
+  containerManager.reset();
   resetNetworkMetric();
   socket?.close(1000, 'Page closed');
 });
@@ -2477,7 +2555,8 @@ async function initialize(): Promise<void> {
   initializeCompatibilityAPI();
   applyURLParameters();
   // 两个视图共用指纹确认与通知，不能随隐藏的终端容器一起消失。
-  document.body.append(ui.hostKeyDialog, ui.toastRegion, ui.filePreviewDialog, ui.filePropertiesDialog);
+  document.body.append(ui.hostKeyDialog, ui.toastRegion, ui.filePreviewDialog, ui.filePropertiesDialog, ui.fileEditorDialog,
+    ui.containerLogDialog, ui.containerConfirmDialog);
   filePage = new FilePage(ui.fileManagerPanel, {
     connect: async (host) => {
       const loading = applyProfile(host);
@@ -2492,8 +2571,26 @@ async function initialize(): Promise<void> {
       if (connectionState === 'idle' || connectionState === 'error') setPanelOpen(true);
     },
   }, fileManager);
+  containerPage = new ContainerPage(ui.containerManagerPanel, {
+    connect: async (host) => {
+      const profile = profiles.find((item) => item.id === host.id);
+      if (!profile) throw new Error('主机不存在或已被删除。');
+      const loading = applyProfile(profile);
+      const selectionGeneration = historyPasswordLoadGeneration;
+      await loading;
+      // 与文件页一致：离开页面会作废凭据读取，不能启动已取消的连接。
+      if (selectionGeneration === historyPasswordLoadGeneration
+        && document.body.dataset.view === 'containers') await connect();
+    },
+    disconnect: () => disconnect(),
+    openTerminal: () => {
+      dashboard?.openWorkspace();
+      if (connectionState === 'idle' || connectionState === 'error') setPanelOpen(true);
+    },
+  }, containerManager);
   dashboard = new Dashboard({
     files: filePage,
+    containers: containerPage,
     snippets: new Snippets(ui.terminalCard, (snippet) => {
       // 片段只进入草稿，尤其多行命令不能通过粘贴意外立即执行。
       const input = document.getElementById('command-editor-input') as HTMLTextAreaElement;

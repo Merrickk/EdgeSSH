@@ -1,4 +1,5 @@
 import type { Page, WebSocketRoute } from '@playwright/test';
+import { parseContainerFrame } from '../../src/backend/container-command.ts';
 
 const fingerprint = `SHA256:${'A'.repeat(43)}`;
 const host = (id: string, name: string, address: string) => ({
@@ -24,6 +25,8 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
   const sshSockets: WebSocketRoute[] = [];
   const sftpSockets: WebSocketRoute[] = [];
   const uploaded: Buffer[] = [];
+  const containerSockets: WebSocketRoute[] = [];
+  const containerCalls: Array<Record<string, any>> = [];
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/auth/me') return route.fulfill({ json: { account: { username: 'Administrator' }, provider: 'cloudflare' } });
@@ -42,6 +45,8 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
     const ready = () => {
       ws.send(JSON.stringify({ type: 'ready' }));
       ws.send(JSON.stringify({ type: 'sftp_attach', url: '/api/sftp?session=test&token=test' }));
+      ws.send(JSON.stringify({ type: 'process_attach', url: '/api/processes?session=test&token=test' }));
+      ws.send(JSON.stringify({ type: 'container_attach', url: '/api/containers?session=test&token=test' }));
     };
     ws.onMessage((raw) => {
       if (typeof raw !== 'string') { calls.push({ type: 'terminal-input', data: raw.toString() }); return; }
@@ -96,16 +101,47 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
         send({ type: 'sftp_upload_complete', requestId });
       }
       if (type === 'sftp_download') {
-        const data = Buffer.from('hello files\n');
+        const data = Buffer.from(name(path) === 'nginx.conf' ? 'server {\n  listen 80;\n}\n' : 'hello files\n');
         send({ type: 'sftp_download_start', requestId, size: data.length });
         ws.send(data);
         send({ type: 'sftp_download_done', requestId, size: data.length });
       }
     });
   });
+  // 容器监控：与真实后端一致，先 container_start 再按周期推送快照。
+  await page.routeWebSocket('**/api/containers**', (ws) => {
+    containerSockets.push(ws);
+    const send = (data: object) => ws.send(JSON.stringify(data));
+    ws.onMessage((raw) => {
+      if (typeof raw !== 'string') return;
+      const message = JSON.parse(raw);
+      calls.push(message);
+      if (message.type === 'container_start') {
+        send({ type: 'container_ready' });
+        // 与真实后端一致：把标记帧交给解析器，再把 JSON 快照发给前端。
+        const frame = [
+          'abc123def456\tweb-nginx\tnginx:1.25\trunning\tUp 3 hours\t2026-09-20 09:00\t0.0.0.0:80->80/tcp',
+          'aaa111bbb222\tdb-postgres\tpostgres:16\texited\tExited (0) 2 hours ago\t2026-09-18 12:00\t',
+          '__CF_WEBSSH_STATS__',
+          'abc123def456\t0.05%\t32MiB / 1GiB\t3.12%\t1.2kB / 3.4kB\t8MB / 12MB\t12',
+          '__CF_WEBSSH_IMAGES__7',
+        ].join('\n');
+        const snapshot = parseContainerFrame(frame, Date.now());
+        send({ type: 'container_snapshot', ...snapshot });
+      }
+      if (message.type === 'container_action') {
+        containerCalls.push(message);
+        if (message.action === 'logs') {
+          send({ type: 'container_action_result', requestId: message.requestId, ok: true, exitStatus: 0, stdout: '2026-09-23 10:00:01 GET /\n', stderr: '' });
+          return;
+        }
+        send({ type: 'container_action_result', requestId: message.requestId, ok: true, exitStatus: 0, stdout: message.target, stderr: '' });
+      }
+    });
+  });
   await page.goto('/');
   await page.locator('#rail-files').click();
-  return { hosts, calls, sshSockets, sftpSockets, uploaded, directories };
+  return { hosts, calls, sshSockets, sftpSockets, uploaded, directories, containerSockets, containerCalls };
 }
 
 export async function connectFiles(page: Page, id = 'alpha') {

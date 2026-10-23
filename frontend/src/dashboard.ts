@@ -3,12 +3,18 @@ import type { HostGlobe } from './globe';
 import type { FilePage } from './file-page';
 import type { Snippets } from './snippets';
 import { ForwardPage } from './forward-page';
+import type { ContainerPage } from './container-page';
 import { countryFlag } from './flags';
 import { systemIcon } from './os-icons';
+import {
+  readHostSnapshot, formatBytes, formatRate,
+  type HostSnapshot, type MetricKey, type MetricUsage,
+} from './host-metrics';
 import './dashboard.css';
 
 interface DashboardActions {
   files: FilePage;
+  containers: ContainerPage;
   snippets: Snippets;
   refresh(): Promise<CloudHost[]>;
   connect(host: CloudHost): Promise<void>;
@@ -21,6 +27,7 @@ const icons = {
   server: '<rect x="4" y="3" width="16" height="7" rx="2"/><rect x="4" y="14" width="16" height="7" rx="2"/><path d="M8 6.5h.01M8 17.5h.01M15 6.5h2M15 17.5h2"/>',
   terminal: '<path d="m5 6 6 6-6 6m8 0h6"/>',
   forward: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M7 14h10m-3-3 3 3-3 3"/>',
+  container: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01M11 7.5h6M11 16.5h6"/>',
   snippets: '<path d="M9 3H7a2 2 0 0 0-2 2v4l-2 3 2 3v4a2 2 0 0 0 2 2h2m6-18h2a2 2 0 0 1 2 2v4l2 3-2 3v4a2 2 0 0 1-2 2h-2"/>',
   folder: '<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M3 9h18"/>',
   shield: '<path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Z"/><path d="m8 12 3 3 5-6"/>',
@@ -28,6 +35,20 @@ const icons = {
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
 };
 function icon(name: keyof typeof icons): string { return `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[name]}</svg>`; }
+
+const METRIC_LABELS: Record<MetricKey, string> = {
+  cpu: 'CPU', memory: '内存', disk: '磁盘', network: '网络',
+};
+
+/** 指标条下方的副标题：用量/总量，网络显示上下行速率。 */
+function formatMetricDetail(key: MetricKey, usage: MetricUsage): string {
+  if (key === 'network') {
+    const rate = usage.rate;
+    return rate ? `↑ ${formatRate(rate.up)} · ↓ ${formatRate(rate.down)}` : '—';
+  }
+  if (!usage.total) return formatBytes(usage.used);
+  return `${formatBytes(usage.used)} / ${formatBytes(usage.total)}`;
+}
 
 export class Dashboard {
   readonly root = document.createElement('section');
@@ -56,8 +77,8 @@ export class Dashboard {
       <div class="home-layout">
         <nav class="home-rail" aria-label="主导航">
           <button class="rail-item selected" id="rail-overview" aria-current="page">${icon('home')}<span>总览</span></button>
-          <button class="rail-item" id="rail-hosts">${icon('server')}<span>主机</span></button>
-          <button class="rail-item" id="rail-files">${icon('folder')}<span>文件管理</span></button>
+          <button class="rail-item" id="rail-files">${icon('folder')}<span>文件</span></button>
+          <button class="rail-item" id="rail-containers">${icon('container')}<span>容器</span></button>
           <button class="rail-item" id="rail-snippets">${icon('snippets')}<span>代码片段</span></button>
           <button class="rail-item" id="rail-forward">${icon('forward')}<span>端口转发</span></button>
           <button class="rail-item" id="quick-connect">${icon('terminal')}<span>快速连接</span></button>
@@ -116,6 +137,7 @@ export class Dashboard {
       </dialog>`;
     document.body.prepend(this.root);
     this.get('.home-layout').append(this.actions.files.root);
+    this.get('.home-layout').append(this.actions.containers.root);
     this.get('.home-layout').append(this.actions.snippets.page);
     this.get('.home-layout').append(this.forwarding.root);
     this.dialog = this.get<HTMLDialogElement>('#host-editor-dialog');
@@ -135,13 +157,14 @@ export class Dashboard {
     this.dialog.addEventListener('close', () => { this.form.reset(); this.editing = undefined; this.returnFocus?.focus(); });
     this.get('#host-search').addEventListener('input', () => this.renderList());
     this.get('#refresh-hosts').addEventListener('click', () => void this.refresh());
-    for (const id of ['#rail-overview', '#rail-hosts']) this.get(id).addEventListener('click', () => {
+    this.get('#rail-overview').addEventListener('click', () => {
       if (!this.actions.files.confirmLeave()) return;
       if (!this.isHome) this.actions.leaveWorkspace();
       this.show();
-      if (id === '#rail-hosts') this.get<HTMLInputElement>('#host-search').focus();
+      this.get<HTMLInputElement>('#host-search').focus();
     });
     this.get('#rail-files').addEventListener('click', () => this.showFiles());
+    this.get('#rail-containers').addEventListener('click', () => this.showContainers());
     this.get('#rail-snippets').addEventListener('click', () => this.showSnippets());
     this.get('#rail-forward').addEventListener('click', () => this.showForwarding());
     for (const id of ['#quick-connect', '#bottom-quick']) this.get(id).addEventListener('click', () => {
@@ -208,6 +231,9 @@ export class Dashboard {
   setHosts(hosts: CloudHost[]): void {
     this.hosts = hosts;
     this.actions.files.setHosts(hosts);
+    this.actions.containers.setHosts(hosts.map((host) => ({
+      id: host.id, name: host.name, username: host.username, host: host.host, port: host.port,
+    })));
     this.forwarding.setHosts(hosts);
     if (this.group && !hosts.some((host) => host.group === this.group)) this.group = '';
     this.renderFilters(); this.renderList();
@@ -227,6 +253,7 @@ export class Dashboard {
   show(): void {
     this.forwarding.hide();
     this.actions.files.hide();
+    this.actions.containers.hide();
     this.actions.snippets.hide();
     this.isHome = true; this.root.hidden = false;
     this.get('.home-content').hidden = false;
@@ -246,6 +273,7 @@ export class Dashboard {
   openWorkspace(): void {
     this.forwarding.hide();
     this.actions.files.hide();
+    this.actions.containers.hide();
     this.actions.snippets.hide();
     this.isHome = false; this.root.hidden = true;
     document.getElementById('app')!.hidden = false;
@@ -257,6 +285,7 @@ export class Dashboard {
 
   showFiles(): void {
     this.forwarding.hide();
+    this.actions.containers.hide();
     this.actions.snippets.hide();
     this.isHome = false; this.root.hidden = false;
     this.get('.home-content').hidden = true;
@@ -267,9 +296,24 @@ export class Dashboard {
     this.actions.files.show();
   }
 
+  showContainers(): void {
+    if (!this.actions.files.confirmLeave()) return;
+    this.forwarding.hide();
+    this.actions.files.hide();
+    this.actions.snippets.hide();
+    this.isHome = false; this.root.hidden = false;
+    this.get('.home-content').hidden = true;
+    document.getElementById('app')!.hidden = true;
+    document.body.dataset.view = 'containers';
+    this.selectNavigation('rail-containers');
+    this.globe?.setActive(false);
+    this.actions.containers.show();
+  }
+
   showSnippets(): void {
     if (!this.actions.files.confirmLeave()) return;
     this.forwarding.hide();
+    this.actions.containers.hide();
     // 仅切换视图，不结束 SSH；在片段页编辑后可回到同一会话。
     this.actions.files.hide();
     this.isHome = false; this.root.hidden = false;
@@ -284,6 +328,7 @@ export class Dashboard {
   showForwarding(): void {
     if (!this.actions.files.confirmLeave()) return;
     this.actions.files.hide();
+    this.actions.containers.hide();
     this.actions.snippets.hide();
     this.isHome = false; this.root.hidden = false;
     this.get('.home-content').hidden = true;
@@ -309,6 +354,7 @@ export class Dashboard {
   private signedOut(): void {
     this.actions.leaveWorkspace();
     this.actions.snippets.clear();
+    this.actions.containers.hide();
     this.authenticated = false;
     this.get('#account-label').textContent = '未登录';
     const action = this.get<HTMLAnchorElement>('#account-action');
@@ -347,7 +393,7 @@ export class Dashboard {
       const heading = document.createElement('h3'); heading.className = 'host-group-heading';
       heading.textContent = `${group} · ${hosts.filter((host) => host.group === group).length}`; list.append(heading);
       for (const host of hosts.filter((host) => host.group === group)) {
-        const row = document.createElement('article'); row.className = 'host-row';
+        const row = document.createElement('article'); row.className = 'host-card';
         const symbol = document.createElement('span'); symbol.className = 'host-symbol';
         symbol.innerHTML = systemIcon(host.system, icon('server'));
         const systemLabel = host.system
@@ -390,7 +436,32 @@ export class Dashboard {
           try { await removeHost(host.id); await this.refresh(); }
           catch (error) { this.notice(error instanceof Error ? error.message : '删除失败。'); remove.disabled = false; }
         });
-        row.append(symbol, copy, location, connect, edit, remove); list.append(row);
+        // komari 风格：卡片底部一条实时/缓存指标带，连接过的主机才有数据。
+        const metrics = document.createElement('div'); metrics.className = 'host-metrics';
+        const snapshot = readHostSnapshot(host.id);
+        for (const key of ['cpu', 'memory', 'disk', 'network'] as const) {
+          const metric = document.createElement('div'); metric.className = 'host-metric';
+          const head = document.createElement('div'); head.className = 'host-metric-head';
+          const label = document.createElement('span'); label.textContent = METRIC_LABELS[key];
+          const value = document.createElement('strong');
+          const usage = snapshot?.[key];
+          value.textContent = usage ? `${Math.round(usage.percent)}%` : '—';
+          head.append(label, value);
+          const bar = document.createElement('div'); bar.className = 'host-metric-bar';
+          const fill = document.createElement('i');
+          fill.style.width = usage ? `${Math.min(100, Math.max(2, usage.percent))}%` : '0%';
+          fill.dataset.metric = key;
+          bar.append(fill);
+          const detail = document.createElement('small');
+          detail.textContent = usage ? formatMetricDetail(key, usage) : '连接后采集';
+          metric.append(head, bar, detail);
+          metrics.append(metric);
+        }
+        const body = document.createElement('div'); body.className = 'host-card-body';
+        body.append(symbol, copy, location);
+        const actions = document.createElement('div'); actions.className = 'host-card-actions';
+        actions.append(connect, edit, remove);
+        row.append(body, metrics, actions); list.append(row);
       }
     }
   }
