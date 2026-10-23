@@ -50,7 +50,7 @@ export class FilePage {
         <div class="files-browser-heading"><strong>${folderIcon}远程目录</strong><span>SFTP · 加密传输</span></div>
         <div class="files-panel-slot"></div>
       </section>
-      <footer class="files-footer"><span>双击目录进入 · 选中文件后操作 · 路径栏按 Enter 跳转</span>
+      <footer class="files-footer"><span>双击目录进入 · 长按或点击 ⋯ 打开操作 · 文件可拖拽到面板上传</span>
         <span>单文件 ≤ 64 MiB · 仅支持删除空目录</span></footer>`;
     this.select = this.get<HTMLSelectElement>('#files-host');
     this.connectButton = this.get<HTMLButtonElement>('#files-connect');
@@ -85,6 +85,7 @@ export class FilePage {
       this.list = new ArboristFileList(host, {
         select: (index) => this.manager.selectEntry(index),
         activate: (index) => this.manager.activateIndex(index),
+        openMenu: (index) => this.manager.openActionSheet(index),
       });
       this.panel.querySelector<HTMLTableElement>('.file-table')!.hidden = true;
       this.manager.setListView(this.list);

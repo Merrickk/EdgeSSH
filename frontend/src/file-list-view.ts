@@ -13,6 +13,8 @@ export interface FileListSnapshot {
   items: FileListItem[];
   selectedId?: string;
   chinese: boolean;
+  /** Current directory; the list only remounts when this changes. */
+  path: string;
 }
 
 export interface FileListView {

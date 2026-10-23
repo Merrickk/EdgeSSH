@@ -1,6 +1,11 @@
 import type { FileListView } from './file-list-view';
+import { fileKind } from './file-kind';
 
 export const MAX_SFTP_FILE_SIZE = 64 * 1024 * 1024;
+/** Preview downloads are capped lower to keep phone memory and Worker JSON small. */
+const MAX_PREVIEW_TEXT_SIZE = 1024 * 1024;
+const MAX_PREVIEW_IMAGE_SIZE = 8 * 1024 * 1024;
+const PREVIEWABLE_KINDS = new Set(['image', 'document', 'script', 'config']);
 export const SFTP_UPLOAD_CHUNK_SIZE = 64 * 1024;
 
 export interface FileManagerElements {
@@ -25,6 +30,32 @@ export interface FileManagerElements {
   progressLabel: HTMLElement;
   progressBar: HTMLProgressElement;
   progressCancel: HTMLButtonElement;
+  /** Optional mobile affordances; absent in older fixtures. */
+  treeToggle?: HTMLButtonElement | null;
+  filterBar?: HTMLElement | null;
+  filterInput?: HTMLInputElement | null;
+  filterToggle?: HTMLButtonElement | null;
+  filterClear?: HTMLButtonElement | null;
+  filterCount?: HTMLElement | null;
+  sortKeySelect?: HTMLSelectElement | null;
+  sortDirButton?: HTMLButtonElement | null;
+  previewDialog?: HTMLDialogElement | null;
+  previewTitle?: HTMLElement | null;
+  previewImage?: HTMLImageElement | null;
+  previewText?: HTMLElement | null;
+  previewClose?: HTMLButtonElement | null;
+  previewDismiss?: HTMLButtonElement | null;
+  previewDownload?: HTMLButtonElement | null;
+  propertiesDialog?: HTMLDialogElement | null;
+  propertiesTitle?: HTMLElement | null;
+  propertiesList?: HTMLElement | null;
+  propertiesClose?: HTMLButtonElement | null;
+  propertiesDismiss?: HTMLButtonElement | null;
+  sheet?: HTMLElement | null;
+  sheetTitle?: HTMLElement | null;
+  sheetSubtitle?: HTMLElement | null;
+  sheetClose?: HTMLButtonElement | null;
+  sheetActions?: HTMLElement | null;
 }
 
 export interface FileManagerOptions {
@@ -48,8 +79,17 @@ export interface SFTPEntry {
   group?: string;
 }
 
+export type FileSortKey = 'name' | 'size' | 'mtime' | 'type' | 'owner';
+
 /** Listener invoked whenever the FileManager's current working directory changes. */
 export type CwdChangeListener = (cwd: string) => void;
+
+const SORT_STORAGE_KEY = 'cf-webssh.file-sort';
+const SORT_KEYS: FileSortKey[] = ['name', 'size', 'mtime', 'type', 'owner'];
+
+function isFileSortKey(value: unknown): value is FileSortKey {
+  return typeof value === 'string' && (SORT_KEYS as string[]).includes(value);
+}
 
 interface LocalizedText {
   zh: string;
@@ -89,6 +129,8 @@ interface DownloadState {
   started: boolean;
   cancelling: boolean;
   cancelSent: boolean;
+  /** When true, the bytes are shown in the preview dialog instead of saved. */
+  preview: boolean;
 }
 
 type SocketData = string | ArrayBuffer | ArrayBufferView | Blob;
@@ -137,6 +179,31 @@ export function collectFileManagerElements(root: ParentNode = document): FileMan
     progressLabel: requiredElement(root, 'file-manager-progress-label'),
     progressBar: requiredElement(root, 'file-manager-progress-bar'),
     progressCancel: requiredElement(root, 'file-manager-progress-cancel'),
+    treeToggle: root.querySelector<HTMLButtonElement>('#file-tree-toggle'),
+    filterBar: root.querySelector<HTMLElement>('#file-filter-bar'),
+    filterInput: root.querySelector<HTMLInputElement>('#file-filter'),
+    filterToggle: root.querySelector<HTMLButtonElement>('#file-filter-toggle'),
+    filterClear: root.querySelector<HTMLButtonElement>('#file-filter-clear'),
+    filterCount: root.querySelector<HTMLElement>('#file-filter-count'),
+    sortKeySelect: root.querySelector<HTMLSelectElement>('#file-sort-key'),
+    sortDirButton: root.querySelector<HTMLButtonElement>('#file-sort-dir'),
+    previewDialog: root.querySelector<HTMLDialogElement>('#file-preview-dialog'),
+    previewTitle: root.querySelector<HTMLElement>('#file-preview-title'),
+    previewImage: root.querySelector<HTMLImageElement>('#file-preview-image'),
+    previewText: root.querySelector<HTMLElement>('#file-preview-text'),
+    previewClose: root.querySelector<HTMLButtonElement>('#file-preview-close'),
+    previewDismiss: root.querySelector<HTMLButtonElement>('#file-preview-dismiss'),
+    previewDownload: root.querySelector<HTMLButtonElement>('#file-preview-download'),
+    propertiesDialog: root.querySelector<HTMLDialogElement>('#file-properties-dialog'),
+    propertiesTitle: root.querySelector<HTMLElement>('#file-properties-title'),
+    propertiesList: root.querySelector<HTMLElement>('#file-properties-list'),
+    propertiesClose: root.querySelector<HTMLButtonElement>('#file-properties-close'),
+    propertiesDismiss: root.querySelector<HTMLButtonElement>('#file-properties-dismiss'),
+    sheet: root.querySelector<HTMLElement>('#file-action-sheet'),
+    sheetTitle: root.querySelector<HTMLElement>('#file-action-sheet-title'),
+    sheetSubtitle: root.querySelector<HTMLElement>('#file-action-sheet-subtitle'),
+    sheetClose: root.querySelector<HTMLButtonElement>('#file-action-sheet-close'),
+    sheetActions: root.querySelector<HTMLElement>('.file-action-sheet-grid'),
   };
 }
 
@@ -235,6 +302,20 @@ export class FileManager {
   }>();
   /** Registered cwd-change listeners, notified on every successful cwd mutation. */
   private cwdListeners = new Set<CwdChangeListener>();
+  /** Element to focus when the action sheet closes. */
+  private sheetReturnFocus: HTMLElement | null = null;
+  /** Touch long-press bookkeeping for the native table. */
+  private longPress: { timer: number; x: number; y: number; row: HTMLTableRowElement } | null = null;
+  /** Raw listing of the current directory; `entries` is the filtered+sorted view. */
+  private sourceEntries: SFTPEntry[] = [];
+  private sortKey: FileSortKey = 'name';
+  private sortAscending = true;
+  private filterText = '';
+  /** Files waiting for the single SFTP upload slot. */
+  private uploadQueue: File[] = [];
+  private queuePumping = false;
+  private dragDepth = 0;
+  private previewUrl: string | null = null;
 
   constructor(options: FileManagerOptions) {
     this.elements = options.elements;
@@ -244,6 +325,8 @@ export class FileManager {
     this.onError = options.onError;
     this.onStatus = options.onStatus;
     this.bindControls();
+    this.loadSortPreference();
+    this.syncSortControls();
     this.renderDisconnected();
   }
 
@@ -390,6 +473,16 @@ export class FileManager {
     this.updateStatusText(this.statusCopy);
     this.renderEntries();
     this.updateProgressLanguage();
+    this.updateDropHint();
+    this.syncSortControls();
+    this.updateFilterCount();
+  }
+
+  private updateDropHint(): void {
+    this.elements.panel.dataset.dropHint = this.localize({
+      zh: '松手即上传到当前目录',
+      en: 'Drop to upload into this folder',
+    });
   }
 
   setListView(view: FileListView | null): void {
@@ -405,6 +498,208 @@ export class FileManager {
   activateIndex(index: number): void {
     this.selectEntry(index);
     this.activateEntry(this.selectedEntry());
+  }
+
+  /** Open the per-entry action sheet (used by the Arborist list and long-press). */
+  openMenu(index: number): void {
+    this.openActionSheet(index);
+  }
+
+  openActionSheet(index: number): void {
+    const entry = this.entries[index];
+    const sheet = this.elements.sheet;
+    if (!entry || !sheet) return;
+    this.sheetReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    this.selectedIndex = index;
+    for (const row of this.elements.tableBody.rows) {
+      const rowIndex = Number(row.dataset.index);
+      const selected = rowIndex === index;
+      row.setAttribute('aria-selected', String(selected));
+      row.tabIndex = selected ? 0 : -1;
+    }
+    if (this.elements.sheetTitle) this.elements.sheetTitle.textContent = entry.name;
+    if (this.elements.sheetSubtitle) {
+      this.elements.sheetSubtitle.textContent = entry.type === 'directory'
+        ? this.localize({ zh: '文件夹', en: 'Folder' })
+        : `${this.localize(this.typeLabel(entry.type))} · ${this.formatSize(entry.size)}`;
+    }
+    sheet.hidden = false;
+    this.updateControls();
+    requestAnimationFrame(() => {
+      this.elements.sheetActions
+        ?.querySelector<HTMLButtonElement>('[data-file-sheet]:not(:disabled)')
+        ?.focus();
+    });
+  }
+
+  closeActionSheet(restoreFocus = true): void {
+    const sheet = this.elements.sheet;
+    if (!sheet || sheet.hidden) return;
+    sheet.hidden = true;
+    if (restoreFocus) this.sheetReturnFocus?.focus();
+    this.sheetReturnFocus = null;
+  }
+
+  // ── View: filter + sort (no refetch) ────────────────────────────────
+
+  private loadSortPreference(): void {
+    try {
+      const raw = localStorage.getItem(SORT_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { key?: unknown; ascending?: unknown };
+      if (isFileSortKey(parsed.key)) this.sortKey = parsed.key;
+      if (typeof parsed.ascending === 'boolean') this.sortAscending = parsed.ascending;
+    } catch { /* A broken preference falls back to the default ordering. */ }
+  }
+
+  private saveSortPreference(): void {
+    try {
+      localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify({ key: this.sortKey, ascending: this.sortAscending }));
+    } catch { /* Storage may be unavailable. */ }
+  }
+
+  private syncSortControls(): void {
+    if (this.elements.sortKeySelect) this.elements.sortKeySelect.value = this.sortKey;
+    if (!this.elements.sortDirButton) return;
+    this.elements.sortDirButton.textContent = this.sortAscending ? '\u2191' : '\u2193';
+    this.elements.sortDirButton.setAttribute('aria-label', this.localize(this.sortAscending
+      ? { zh: '当前升序，点击改为降序', en: 'Ascending order; activate for descending' }
+      : { zh: '当前降序，点击改为升序', en: 'Descending order; activate for ascending' }));
+  }
+
+  /** Apply the filter and sort to the cached listing and repaint both views. */
+  private applyView(): void {
+    const query = this.filterText.trim().toLocaleLowerCase();
+    const filtered = query
+      ? this.sourceEntries.filter((entry) => entry.name.toLocaleLowerCase().includes(query))
+      : this.sourceEntries;
+    const direction = this.sortAscending ? 1 : -1;
+    const key = this.sortKey;
+    const collation = this.isChinese() ? 'zh-CN' : 'en';
+    this.entries = [...filtered].sort((left, right) => {
+      // Directories stay on top in name order for every sort key, like the previous behaviour.
+      const leftIsDir = left.type === 'directory';
+      if (leftIsDir !== (right.type === 'directory')) return leftIsDir ? -1 : 1;
+      if (leftIsDir) return left.name.localeCompare(right.name, collation, { numeric: true, sensitivity: 'base' });
+      let result = 0;
+      if (key === 'size') result = Number(left.size) - Number(right.size);
+      else if (key === 'mtime') result = Number(left.mtime) - Number(right.mtime);
+      else if (key === 'type') result = left.type.localeCompare(right.type);
+      else if (key === 'owner') result = String(left.owner ?? left.uid ?? '').localeCompare(String(right.owner ?? right.uid ?? ''), undefined, { numeric: true });
+      if (result === 0) result = left.name.localeCompare(right.name, collation, { numeric: true, sensitivity: 'base' });
+      return result * direction;
+    });
+    this.selectedIndex = -1;
+    this.elements.empty.hidden = this.entries.length !== 0;
+    this.updateFilterCount();
+    this.renderEntries();
+    this.updateControls();
+  }
+
+  private updateFilterCount(): void {
+    if (this.elements.filterCount) {
+      const total = this.sourceEntries.length;
+      const shown = this.entries.length;
+      this.elements.filterCount.textContent = this.filterText.trim() && total > 0
+        ? `${shown} / ${total}`
+        : total > 0 ? String(total) : '';
+    }
+    if (this.elements.filterClear) this.elements.filterClear.hidden = !this.filterText;
+  }
+
+  private revokePreviewUrl(): void {
+    if (!this.previewUrl) return;
+    URL.revokeObjectURL(this.previewUrl);
+    this.previewUrl = null;
+  }
+
+  private async showPreview(name: string, blob: Blob): Promise<void> {
+    const dialog = this.elements.previewDialog;
+    if (!dialog) return;
+    if (this.elements.previewTitle) this.elements.previewTitle.textContent = name;
+    this.revokePreviewUrl();
+    const image = this.elements.previewImage;
+    const text = this.elements.previewText;
+    if (fileKind({ name, type: 'file' }) === 'image' && image) {
+      this.previewUrl = URL.createObjectURL(blob);
+      image.src = this.previewUrl;
+      image.alt = name;
+      image.hidden = false;
+      if (text) text.hidden = true;
+    } else if (text) {
+      if (image) image.hidden = true;
+      const buffer = await blob.arrayBuffer();
+      const head = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 8192));
+      text.textContent = head.includes(0)
+        ? this.localize({ zh: '二进制文件，无法以文本预览。', en: 'Binary file: cannot preview as text.' })
+        : new TextDecoder('utf-8').decode(buffer);
+      text.hidden = false;
+    }
+    if (!dialog.open) dialog.showModal();
+  }
+
+  private describeSize(size: number | string): string {
+    const formatted = this.formatSize(size);
+    const raw = `${size} B`;
+    return formatted === raw ? formatted : `${formatted} (${raw})`;
+  }
+
+  private showProperties(entry: SFTPEntry): void {
+    const dialog = this.elements.propertiesDialog;
+    const list = this.elements.propertiesList;
+    if (!dialog || !list) return;
+    if (this.elements.propertiesTitle) this.elements.propertiesTitle.textContent = entry.name;
+    const rows: Array<[string, string]> = [
+      [this.localize({ zh: '名称', en: 'Name' }), entry.name],
+      [this.localize({ zh: '路径', en: 'Path' }), joinPath(this.cwd, entry.name)],
+      [this.localize({ zh: '类型', en: 'Type' }), this.localize(this.typeLabel(entry.type))],
+      [this.localize({ zh: '大小', en: 'Size' }), entry.type === 'directory' ? '\u2014' : this.describeSize(entry.size)],
+      [this.localize({ zh: '修改时间', en: 'Modified' }), this.formatDate(entry.mtime)],
+      [this.localize({ zh: '权限', en: 'Permissions' }), String(entry.permissions || '\u2014')],
+      [this.localize({ zh: '用户', en: 'Owner' }), String(entry.owner ?? entry.uid ?? '\u2014')],
+      [this.localize({ zh: '组', en: 'Group' }), String(entry.group ?? entry.gid ?? '\u2014')],
+    ];
+    list.replaceChildren(...rows.map(([label, value]) => {
+      const row = document.createElement('div');
+      const term = document.createElement('dt');
+      term.textContent = label;
+      const detail = document.createElement('dd');
+      detail.textContent = value;
+      row.append(term, detail);
+      return row;
+    }));
+    if (!dialog.open) dialog.showModal();
+  }
+
+  private handleSheetAction(action: string): void {
+    const entry = this.selectedEntry();
+    this.closeActionSheet(false);
+    switch (action) {
+      case 'open': this.activateEntry(entry); break;
+      case 'download': this.downloadSelected(); break;
+      case 'preview': this.previewSelected(); break;
+      case 'properties': if (entry) this.showProperties(entry); break;
+      case 'rename': void this.renameSelected(); break;
+      case 'delete': void this.deleteSelected(); break;
+      case 'new-folder': void this.createDirectory(); break;
+      case 'upload': this.elements.uploadInput.click(); break;
+      case 'refresh': this.refresh(); break;
+    }
+  }
+
+  private updateSheetControls(): void {
+    const actions = this.elements.sheetActions;
+    if (!actions) return;
+    const selected = this.selectedEntry();
+    const idle = this.ready && !this.hasTransfer() && !this.uploadConfirmationPending;
+    for (const button of actions.querySelectorAll<HTMLButtonElement>('[data-file-sheet]')) {
+      const action = button.dataset.fileSheet;
+      if (action === 'open') button.disabled = !selected;
+      else if (action === 'download') button.disabled = !idle || !selected || selected.type !== 'file' || sizeExceedsLimit(selected.size);
+      else if (action === 'preview') button.disabled = !idle || !selected || selected.type !== 'file' || !PREVIEWABLE_KINDS.has(fileKind(selected));
+      else if (action === 'rename' || action === 'delete') button.disabled = !idle || !selected;
+      else button.disabled = !idle;
+    }
   }
 
   /**
@@ -440,7 +735,70 @@ export class FileManager {
     return () => { this.cwdListeners.delete(listener); };
   }
 
-  async upload(file: File, destination?: string): Promise<void> {
+  /** Queue a single file. Kept for callers that upload one file at a time. */
+  upload(file: File, destination?: string): Promise<void> {
+    return this.uploadFiles([file], destination);
+  }
+
+  /**
+   * Queue files for upload. The SFTP channel supports one upload at a time, so
+   * the queue drains sequentially and each file reports its own progress.
+   */
+  async uploadFiles(files: Iterable<File>, destination?: string): Promise<void> {
+    if (!this.ready) {
+      this.showError(this.localize({ zh: 'SFTP 尚未就绪。', en: 'SFTP is not ready.' }));
+      return;
+    }
+    const accepted: File[] = [];
+    let oversized = 0;
+    for (const file of files) {
+      if (file.size > MAX_SFTP_FILE_SIZE) oversized++;
+      else accepted.push(file);
+    }
+    if (oversized > 0) {
+      this.showError(this.localize({
+        zh: `已跳过 ${oversized} 个超过 64 MiB 的文件。`,
+        en: `Skipped ${oversized} file${oversized === 1 ? '' : 's'} over 64 MiB.`,
+      }));
+    }
+    if (accepted.length === 0) return;
+    this.uploadQueue.push(...accepted);
+    if (accepted.length > 1) {
+      this.setStatus({
+        zh: `已加入 ${accepted.length} 个文件，正在排队上传…`,
+        en: `Queued ${accepted.length} files for upload…`,
+      });
+    }
+    await this.pumpUploadQueue(destination);
+  }
+
+  private async pumpUploadQueue(destination?: string): Promise<void> {
+    if (this.queuePumping) return;
+    this.queuePumping = true;
+    try {
+      while (this.uploadQueue.length > 0) {
+        if (!this.ready || !this.isSocketOpen()) {
+          this.clearUploadQueue();
+          return;
+        }
+        if (this.hasTransfer() || this.uploadConfirmationPending) return;
+        const file = this.uploadQueue.shift()!;
+        await this.startUpload(file, destination);
+        // The completion/cancel/error handlers call pump again once the slot frees.
+        if (this.uploadState) return;
+      }
+    } finally {
+      this.queuePumping = false;
+    }
+  }
+
+  private clearUploadQueue(): void {
+    if (this.uploadQueue.length === 0) return;
+    this.uploadQueue = [];
+    this.updateControls();
+  }
+
+  private async startUpload(file: File, destination?: string): Promise<void> {
     if (!this.ready || this.hasTransfer() || this.uploadConfirmationPending) return;
     if (file.size > MAX_SFTP_FILE_SIZE) {
       this.showError(this.localize({ zh: '文件不能超过 64 MiB。', en: 'Files cannot exceed 64 MiB.' }));
@@ -497,9 +855,30 @@ export class FileManager {
 
   downloadSelected(): void {
     const entry = this.selectedEntry();
-    if (!this.ready || !entry || entry.type !== 'file' || this.hasTransfer()) return;
-    if (sizeExceedsLimit(entry.size)) {
-      this.showError(this.localize({ zh: '文件不能超过 64 MiB。', en: 'Files cannot exceed 64 MiB.' }));
+    if (entry) this.startDownload(entry, false);
+  }
+
+  /** Download a previewable file into the preview dialog instead of saving it. */
+  previewSelected(): void {
+    const entry = this.selectedEntry();
+    if (!entry || entry.type !== 'file') return;
+    if (!PREVIEWABLE_KINDS.has(fileKind(entry))) {
+      this.showError(this.localize({ zh: '该文件类型暂不支持预览。', en: 'This file type cannot be previewed.' }));
+      return;
+    }
+    this.startDownload(entry, true);
+  }
+
+  private startDownload(entry: SFTPEntry, preview: boolean): void {
+    if (!this.ready || entry.type !== 'file' || this.hasTransfer()) return;
+    const limit = preview
+      ? (fileKind(entry) === 'image' ? MAX_PREVIEW_IMAGE_SIZE : MAX_PREVIEW_TEXT_SIZE)
+      : MAX_SFTP_FILE_SIZE;
+    const size = transferSize(entry.size);
+    if (size !== null && size > limit) {
+      this.showError(preview
+        ? this.localize({ zh: '文件过大，无法预览。', en: 'This file is too large to preview.' })
+        : this.localize({ zh: '文件不能超过 64 MiB。', en: 'Files cannot exceed 64 MiB.' }));
       return;
     }
     const path = joinPath(this.cwd, entry.name);
@@ -509,12 +888,13 @@ export class FileManager {
       requestId,
       path,
       name: entry.name,
-      expectedSize: transferSize(entry.size),
+      expectedSize: size,
       received: 0,
       chunks: [],
       started: false,
       cancelling: false,
       cancelSent: false,
+      preview,
     };
     this.showProgress('download', entry.name, 0);
     this.send({ type: 'sftp_download', requestId, path });
@@ -542,19 +922,165 @@ export class FileManager {
     this.elements.refresh.addEventListener('click', () => this.refresh(), { signal });
     this.elements.upload.addEventListener('click', () => this.elements.uploadInput.click(), { signal });
     this.elements.uploadInput.addEventListener('change', () => {
-      const file = this.elements.uploadInput.files?.[0];
+      const files = Array.from(this.elements.uploadInput.files ?? []);
       this.elements.uploadInput.value = '';
-      if (file) void this.upload(file);
+      if (files.length > 0) void this.uploadFiles(files);
     }, { signal });
     this.elements.download.addEventListener('click', () => this.downloadSelected(), { signal });
     this.elements.progressCancel.addEventListener('click', () => this.cancelTransfer(), { signal });
     this.elements.mkdir.addEventListener('click', () => void this.createDirectory(), { signal });
     this.elements.rename.addEventListener('click', () => void this.renameSelected(), { signal });
     this.elements.delete.addEventListener('click', () => void this.deleteSelected(), { signal });
+    this.elements.sheetClose?.addEventListener('click', () => this.closeActionSheet(), { signal });
+    this.elements.sheet?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.closeActionSheet();
+    }, { signal });
+    this.elements.sheet?.addEventListener('click', (event) => {
+      // Clicking the dimmed backdrop dismisses without restoring focus.
+      if (event.target === this.elements.sheet) this.closeActionSheet(false);
+    }, { signal });
+    this.elements.sheetActions?.addEventListener('click', (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest<HTMLButtonElement>('[data-file-sheet]')
+        : null;
+      if (!button || button.disabled) return;
+      this.handleSheetAction(button.dataset.fileSheet ?? '');
+    }, { signal });
+    const closePreview = () => {
+      this.revokePreviewUrl();
+      this.elements.previewDialog?.close();
+    };
+    this.elements.previewClose?.addEventListener('click', closePreview, { signal });
+    this.elements.previewDismiss?.addEventListener('click', closePreview, { signal });
+    this.elements.previewDialog?.addEventListener('close', () => this.revokePreviewUrl(), { signal });
+    this.elements.previewDownload?.addEventListener('click', () => {
+      closePreview();
+      this.downloadSelected();
+    }, { signal });
+    this.elements.propertiesClose?.addEventListener('click', () => this.elements.propertiesDialog?.close(), { signal });
+    this.elements.propertiesDismiss?.addEventListener('click', () => this.elements.propertiesDialog?.close(), { signal });
+
     this.elements.tableBody.addEventListener('click', (event) => {
+      const menu = event.target instanceof Element
+        ? event.target.closest<HTMLElement>('[data-file-menu]')
+        : null;
+      if (menu) {
+        event.stopPropagation();
+        const index = Number(menu.dataset.fileMenu);
+        if (Number.isInteger(index)) this.openActionSheet(index);
+        return;
+      }
       const target = this.rowFromEvent(event);
       if (target) this.selectRow(target, true);
     }, { signal });
+    this.elements.tableBody.addEventListener('contextmenu', (event) => {
+      const target = this.rowFromEvent(event);
+      if (!target) return;
+      event.preventDefault();
+      const index = Number(target.dataset.index);
+      if (Number.isInteger(index)) this.openActionSheet(index);
+    }, { signal });
+    // Long-press opens the same sheet on touch devices. A small movement
+    // threshold keeps vertical scrolling from being mistaken for a long press.
+    const cancelLongPress = () => {
+      if (!this.longPress) return;
+      window.clearTimeout(this.longPress.timer);
+      this.longPress = null;
+    };
+    this.elements.tableBody.addEventListener('pointerdown', (event) => {
+      if (event.pointerType === 'mouse') return;
+      const target = this.rowFromEvent(event);
+      if (!target) return;
+      cancelLongPress();
+      const index = Number(target.dataset.index);
+      this.longPress = {
+        x: event.clientX,
+        y: event.clientY,
+        row: target,
+        timer: window.setTimeout(() => {
+          this.longPress = null;
+          if (Number.isInteger(index)) this.openActionSheet(index);
+        }, 480),
+      };
+    }, { signal });
+    this.elements.tableBody.addEventListener('pointermove', (event) => {
+      if (!this.longPress) return;
+      if (Math.abs(event.clientX - this.longPress.x) > 8 || Math.abs(event.clientY - this.longPress.y) > 8) {
+        cancelLongPress();
+      }
+    }, { signal });
+    this.elements.tableBody.addEventListener('pointerup', cancelLongPress, { signal });
+    this.elements.tableBody.addEventListener('pointercancel', cancelLongPress, { signal });
+    this.elements.tableBody.addEventListener('scroll', cancelLongPress, { signal });
+
+    this.elements.filterInput?.addEventListener('input', () => {
+      this.filterText = this.elements.filterInput!.value;
+      this.applyView();
+    }, { signal });
+    this.elements.filterInput?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      this.elements.filterInput!.value = '';
+      this.filterText = '';
+      this.applyView();
+    }, { signal });
+    this.elements.filterToggle?.addEventListener('click', () => {
+      const bar = this.elements.filterBar;
+      if (!bar) return;
+      bar.hidden = !bar.hidden;
+      this.elements.filterToggle!.setAttribute('aria-expanded', String(!bar.hidden));
+      if (!bar.hidden) this.elements.filterInput?.focus();
+    }, { signal });
+    this.elements.filterClear?.addEventListener('click', () => {
+      if (!this.elements.filterInput) return;
+      this.elements.filterInput.value = '';
+      this.filterText = '';
+      this.applyView();
+      this.elements.filterInput.focus();
+    }, { signal });
+    this.elements.sortKeySelect?.addEventListener('change', () => {
+      const value = this.elements.sortKeySelect!.value;
+      if (!isFileSortKey(value)) return;
+      this.sortKey = value;
+      this.saveSortPreference();
+      this.syncSortControls();
+      this.applyView();
+    }, { signal });
+    this.elements.sortDirButton?.addEventListener('click', () => {
+      this.sortAscending = !this.sortAscending;
+      this.saveSortPreference();
+      this.syncSortControls();
+      this.applyView();
+    }, { signal });
+
+    // Drag files from the desktop onto the panel to upload into the current directory.
+    const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes('Files');
+    this.elements.panel.addEventListener('dragenter', (event) => {
+      if (!this.ready || !hasFiles(event)) return;
+      event.preventDefault();
+      this.dragDepth++;
+      this.elements.panel.classList.add('is-drop-target');
+    }, { signal });
+    this.elements.panel.addEventListener('dragover', (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    }, { signal });
+    this.elements.panel.addEventListener('dragleave', () => {
+      this.dragDepth = Math.max(0, this.dragDepth - 1);
+      if (this.dragDepth === 0) this.elements.panel.classList.remove('is-drop-target');
+    }, { signal });
+    this.elements.panel.addEventListener('drop', (event) => {
+      event.preventDefault();
+      this.dragDepth = 0;
+      this.elements.panel.classList.remove('is-drop-target');
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      if (files.length > 0) void this.uploadFiles(files);
+    }, { signal });
+    this.updateDropHint();
     this.elements.tableBody.addEventListener('focusin', (event) => {
       const target = this.rowFromEvent(event);
       if (target) this.selectRow(target, false);
@@ -719,19 +1245,18 @@ export class FileManager {
     } else if (pending.historyMode === 'index' && pending.historyIndex !== undefined) {
       this.historyIndex = pending.historyIndex;
     }
-    this.entries = entries;
+    this.sourceEntries = entries;
     this.selectedIndex = -1;
+    this.closeActionSheet(false);
     this.elements.path.value = path;
     this.elements.loading.hidden = true;
     this.elements.error.hidden = true;
-    this.elements.empty.hidden = entries.length !== 0;
-    this.renderEntries();
+    this.applyView();
     const truncated = message.isTruncated === true;
     this.setStatus({
       zh: `${entries.length} 个项目${truncated ? '（列表已截断）' : ''}`,
       en: `${entries.length} item${entries.length === 1 ? '' : 's'}${truncated ? ' (list truncated)' : ''}`,
     });
-    this.updateControls();
   }
 
   private parseEntry(value: unknown): SFTPEntry | null {
@@ -764,6 +1289,7 @@ export class FileManager {
     if (this.listView) {
       this.listView.render({
         chinese: this.isChinese(),
+        path: this.cwd,
         selectedId: this.selectedEntry()?.name,
         items: this.entries.map((entry, index) => ({
           id: entry.name, name: entry.name, index, entry,
@@ -794,7 +1320,17 @@ export class FileManager {
       const name = document.createElement('span');
       name.textContent = entry.name;
       nameWrap.append(icon, name);
-      nameCell.append(nameWrap);
+      const menu = document.createElement('button');
+      menu.type = 'button';
+      menu.className = 'file-row-actions';
+      menu.dataset.fileMenu = String(index);
+      menu.setAttribute('aria-label', this.localize({
+        zh: `操作 ${entry.name}`,
+        en: `Actions for ${entry.name}`,
+      }));
+      menu.setAttribute('aria-haspopup', 'dialog');
+      menu.textContent = '\u22ef';
+      nameCell.append(nameWrap, menu);
       row.append(
         nameCell,
         this.cell(entry.type === 'directory' ? '' : this.formatSize(entry.size)),
@@ -959,8 +1495,16 @@ export class FileManager {
     this.pending.delete(state.requestId);
     this.uploadState = null;
     this.hideProgress();
-    this.setStatus({ zh: `已上传 ${state.file.name}`, en: `Uploaded ${state.file.name}` });
+    const remaining = this.uploadQueue.length;
+    this.setStatus(remaining > 0
+      ? { zh: `已上传 ${state.file.name}，剩余 ${remaining} 个`, en: `Uploaded ${state.file.name}, ${remaining} left in queue` }
+      : { zh: `已上传 ${state.file.name}`, en: `Uploaded ${state.file.name}` });
     this.updateControls();
+    if (remaining > 0) {
+      // 队列排空后再刷新目录，避免每个文件都重新拉一次列表。
+      void this.pumpUploadQueue();
+      return;
+    }
     this.refresh();
   }
 
@@ -1028,10 +1572,15 @@ export class FileManager {
     }
     this.pending.delete(state.requestId);
     this.downloadState = null;
-    this.saveBlob(new Blob(state.chunks), state.name);
+    const blob = new Blob(state.chunks);
+    if (state.preview) void this.showPreview(state.name, blob);
+    else this.saveBlob(blob, state.name);
     this.hideProgress();
-    this.setStatus({ zh: `已下载 ${state.name}`, en: `Downloaded ${state.name}` });
+    this.setStatus(state.preview
+      ? { zh: `正在预览 ${state.name}`, en: `Previewing ${state.name}` }
+      : { zh: `已下载 ${state.name}`, en: `Downloaded ${state.name}` });
     this.updateControls();
+    void this.pumpUploadQueue();
   }
 
   private handleServerError(message: JsonRecord): void {
@@ -1199,6 +1748,8 @@ export class FileManager {
     this.downloadState = null;
     this.hideProgress();
     if (updateControls) this.updateControls();
+    // A cancelled or failed transfer frees the single upload slot for the queue.
+    void this.pumpUploadQueue();
   }
 
   private failTransfer(message: string): void {
@@ -1222,11 +1773,17 @@ export class FileManager {
     this.elements.download.disabled = !idle || !selected || selected.type !== 'file' || sizeExceedsLimit(selected.size);
     this.elements.rename.disabled = !idle || !selected;
     this.elements.delete.disabled = !idle || !selected;
+    this.updateSheetControls();
   }
 
   private renderDisconnected(channelLost = false, detail?: LocalizedText): void {
     this.entries = [];
+    this.sourceEntries = [];
     this.selectedIndex = -1;
+    this.uploadQueue = [];
+    this.dragDepth = 0;
+    this.elements.panel.classList.remove('is-drop-target');
+    this.closeActionSheet(false);
     this.renderEntries();
     this.elements.loading.hidden = true;
     this.elements.empty.hidden = true;

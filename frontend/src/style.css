@@ -1188,7 +1188,7 @@ button:disabled {
   display: grid;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: minmax(0, 1fr) minmax(34px, 0fr);
+  grid-template-rows: minmax(0, 1fr) 0 minmax(34px, 0fr);
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -1197,13 +1197,87 @@ button:disabled {
   transition: grid-template-rows 220ms cubic-bezier(0.2, 0.75, 0.2, 1);
 }
 
+.terminal-pane { grid-row: 1; }
+.dock-resize { grid-row: 2; }
+.workspace-dock { grid-row: 3; }
+
 .terminal-card.workspace-panel-open {
-  grid-template-rows: minmax(0, 1.618fr) minmax(34px, 1fr);
+  /* --dock-height is set in pixels by the splitter; the default percentage
+     keeps the panel usable before the first drag. */
+  grid-template-rows: minmax(0, 1fr) auto minmax(34px, var(--dock-height, 42%));
+}
+
+.terminal-card.workspace-panel-open.dock-maximized {
+  grid-template-rows: minmax(0, 0fr) auto minmax(34px, 1fr);
+}
+
+/* Drag handle between the terminal and the workspace dock. It is only a grid
+   item while a dock tab is open, so the collapsed 34px tab strip stays intact. */
+.dock-resize {
+  position: relative;
+  z-index: 6;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  height: 10px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.terminal-card.workspace-panel-open .dock-resize { display: flex; }
+
+.dock-resize::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.dock-resize:hover::before,
+.dock-resize:focus-visible::before,
+.terminal-card.is-resizing .dock-resize::before {
+  background: var(--accent-dim);
+}
+
+.dock-resize-grip {
+  position: relative;
+  width: 42px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border);
+  transition: background 120ms ease, width 120ms ease;
+}
+
+.dock-resize:hover .dock-resize-grip,
+.dock-resize:focus-visible .dock-resize-grip,
+.terminal-card.is-resizing .dock-resize-grip {
+  width: 56px;
+  background: var(--accent);
+}
+
+.dock-resize:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Disable the open/close animation while dragging and keep the terminal from
+   swallowing pointer events mid-gesture. */
+.terminal-card.is-resizing { transition: none; }
+.terminal-card.is-resizing .terminal-pane { pointer-events: none; }
+
+.dock-tab-maximize[aria-pressed='true'] {
+  background: var(--accent-dim);
+  color: var(--accent);
 }
 
 @media (max-width: 760px) {
   .terminal-card.workspace-panel-open {
-    grid-template-rows: minmax(0, 1fr) minmax(34px, 1fr);
+    /* Phones get a taller default panel; the splitter still allows 25%–100%. */
+    grid-template-rows: minmax(0, 1fr) auto minmax(34px, var(--dock-height, 68%));
   }
 }
 
@@ -1624,6 +1698,8 @@ button:disabled {
 }
 
 .event-bar {
+  position: relative;
+  z-index: 6;
   min-width: 0;
   justify-content: space-between;
   gap: 12px;
@@ -1823,17 +1899,366 @@ button:disabled {
 }
 
 .file-manager {
+  position: relative;
   display: grid;
   min-width: 0;
   min-height: 0;
   grid-template-columns: var(--file-tree-width, 240px) minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr) 25px;
+  grid-template-rows: auto auto minmax(0, 1fr) 25px;
   grid-template-areas:
     "toolbar toolbar"
+    "filter  filter"
     "tree    table"
     "status  status";
   overflow: hidden;
   background: var(--surface);
+}
+
+/* Toolbar-only tree toggle; the drawer itself is enabled on narrow screens.
+   The .file-action class sets display:grid, so match its specificity. */
+.file-action.file-tree-drawer-toggle { display: none; }
+
+.file-filter-bar {
+  grid-area: filter;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--panel);
+}
+
+.file-filter-bar[hidden] { display: none; }
+
+.file-filter-field { flex: 1 1 auto; min-width: 90px; }
+
+.file-filter-field input {
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.file-filter-field input:focus {
+  border-color: var(--accent);
+  outline: 0;
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.file-sort-field select {
+  height: 26px;
+  padding: 0 22px 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font: 10px var(--mono);
+}
+
+.file-filter-count {
+  min-width: 5ch;
+  color: var(--muted);
+  font: 10px var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.file-sort-dir,
+.file-filter-clear { min-width: 26px; height: 26px; font-size: 12px; }
+
+/* Per-row overflow menu. Kept inside the name cell so the table column count
+   and the existing keyboard/selection model stay unchanged. */
+.file-table td:first-child { position: relative; padding-right: 40px; }
+
+.file-row-actions {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  z-index: 2;
+  transform: translateY(-50%);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+tr:hover .file-row-actions,
+tr:focus-within .file-row-actions,
+tr[aria-selected='true'] .file-row-actions { opacity: 1; }
+
+.file-row-actions:hover,
+.file-row-actions:focus-visible {
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+@media (hover: none) {
+  .file-row-actions { opacity: 1; }
+}
+
+/* Bottom action sheet shared by the table and the Arborist list. */
+/* Drag-and-drop upload overlay. The hint text comes from FileManager so it
+   follows the active language without duplicating translations in CSS. */
+.file-manager.is-drop-target::after {
+  position: absolute;
+  inset: 46px 12px 34px;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  color: var(--accent);
+  content: attr(data-drop-hint);
+  font-size: 13px;
+  font-weight: 650;
+  pointer-events: none;
+}
+
+.file-action-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(1, 5, 8, 0.45);
+  animation: file-sheet-fade 140ms ease-out;
+}
+
+.file-action-sheet[hidden] { display: none; }
+
+.file-action-sheet-panel {
+  width: min(460px, 100%);
+  max-height: 88%;
+  overflow: auto;
+  padding: 10px 12px calc(12px + env(safe-area-inset-bottom));
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 16px 16px 0 0;
+  background: var(--surface);
+  box-shadow: 0 -18px 48px rgba(0, 0, 0, 0.28);
+  animation: file-sheet-in 180ms cubic-bezier(0.2, 0.75, 0.2, 1);
+}
+
+.file-action-sheet-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 4px 10px;
+}
+
+.file-action-sheet-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-action-sheet-heading strong {
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-action-sheet-subtitle {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-action-sheet-close {
+  width: 36px;
+  height: 36px;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+}
+
+.file-action-sheet-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.file-action-sheet-grid button {
+  min-height: 46px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+.file-action-sheet-grid button:hover:not(:disabled) { border-color: var(--accent); }
+.file-action-sheet-grid button:disabled { opacity: 0.45; }
+
+.file-action-sheet-grid button.danger {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+  color: var(--danger);
+}
+
+@media (min-width: 601px) {
+  .file-action-sheet { align-items: center; }
+  .file-action-sheet-panel {
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+  }
+}
+
+/* Preview / properties dialogs. */
+.file-dialog {
+  width: min(760px, calc(100vw - 28px));
+  max-height: calc(100dvh - 28px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.5);
+}
+
+.file-dialog::backdrop {
+  background: rgba(2, 6, 9, 0.72);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+.file-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.file-dialog-header .eyebrow { margin: 0; }
+
+.file-dialog-header h2 {
+  margin: 2px 0 0;
+  overflow: hidden;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-dialog-close {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+}
+
+.file-preview-body {
+  min-height: 120px;
+  max-height: calc(100dvh - 240px);
+  overflow: auto;
+  padding: 12px 16px;
+  background: var(--surface-2);
+}
+
+.file-preview-body img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100dvh - 280px);
+  margin: 0 auto;
+  object-fit: contain;
+}
+
+.file-preview-body pre {
+  margin: 0;
+  color: var(--text);
+  font: 12px/1.6 var(--mono);
+  tab-size: 4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.file-preview-body :is(img, pre)[hidden] { display: none; }
+
+.file-properties-list {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  background: var(--border-soft);
+}
+
+.file-properties-list div {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 12px;
+  padding: 9px 16px;
+  background: var(--surface);
+}
+
+.file-properties-list dt { color: var(--muted); font-size: 11px; }
+
+.file-properties-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font: 11px/1.5 var(--mono);
+}
+
+.file-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-soft);
+}
+
+@media (max-width: 600px) {
+  .file-dialog {
+    width: 100vw;
+    max-width: 100vw;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+  .file-preview-body { max-height: calc(100dvh - 190px); }
+  .file-properties-list div { grid-template-columns: 84px minmax(0, 1fr); }
+}
+
+@keyframes file-sheet-in {
+  from { opacity: 0.6; transform: translateY(24px); }
+}
+
+@keyframes file-sheet-fade {
+  from { opacity: 0; }
 }
 
 .file-manager:has(> .file-tree.is-collapsed) {
@@ -3039,25 +3464,64 @@ button:disabled {
     padding: 3px 5px;
   }
 
-  /* Mobile: keep the tree column but default it to a 24px collapsed strip
-     (see JS loadCollapsed()). Use min() so a width dragged wide on desktop
-     won't fill the whole phone screen. */
+  /* Mobile: the directory tree becomes an off-canvas drawer toggled from the
+     toolbar. The table keeps the full width, which is the main win on a phone. */
   .file-manager {
-    grid-template-columns: min(var(--file-tree-width, 200px), 45vw) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      "toolbar toolbar"
-      "tree    table"
-      "status  status";
+      "toolbar"
+      "filter"
+      "table"
+      "status";
   }
 
-  /* Restate the collapsed column width inside the media query: the rule at
-     L1353 (outside the query) is overridden by the .file-manager rule above
-     due to source order, so the 24px collapsed width must be repeated here. */
-  .file-manager:has(> .file-tree.is-collapsed) {
-    grid-template-columns: 24px minmax(0, 1fr);
+  .file-filter-bar { padding: 5px 8px; gap: 5px; }
+  .file-filter-field input { height: 40px; font-size: 16px; }
+  .file-sort-field select { height: 40px; font-size: 13px; }
+  .file-sort-dir,
+  .file-filter-clear { min-width: 40px; height: 40px; }
+
+  .file-action.file-tree-drawer-toggle { display: inline-grid; }
+
+  .file-manager > .file-tree {
+    position: absolute;
+    z-index: 12;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    display: flex;
+    width: min(300px, 84vw);
+    transform: translateX(-102%);
+    transition: transform 180ms cubic-bezier(0.2, 0.75, 0.2, 1);
+    box-shadow: 18px 0 42px rgba(0, 0, 0, 0.28);
+    background: var(--surface);
   }
 
-  /* Touch screens: dragging the resize handle is error-prone, hide it. */
+  .file-manager.tree-open > .file-tree { transform: none; }
+
+  /* The persisted desktop collapse state must not shrink the mobile drawer.
+     Match the (0,4,0) specificity of the desktop collapse rules above. */
+  .file-manager:has(> .file-tree.is-collapsed) { grid-template-columns: minmax(0, 1fr); }
+  .file-manager:has(> .file-tree.is-collapsed) > .file-tree { width: min(300px, 84vw); }
+  .file-manager:has(> .file-tree.is-collapsed) > .file-tree .file-tree-scroller { display: block; }
+  .file-manager:has(> .file-tree.is-collapsed) > .file-tree .file-tree-title { display: inline; }
+  .file-manager:has(> .file-tree.is-collapsed) > .file-tree .file-tree-header {
+    justify-content: space-between;
+    padding-inline: 12px;
+  }
+
+  .file-tree-scrim {
+    position: absolute;
+    inset: 0;
+    z-index: 11;
+    padding: 0;
+    border: 0;
+    background: rgba(1, 5, 8, 0.45);
+  }
+
+  .file-tree-scrim[hidden] { display: none; }
+
+  /* Touch screens: dragging the tree resize handle is error-prone, hide it. */
   .file-tree-resize {
     display: none;
   }

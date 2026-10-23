@@ -402,7 +402,24 @@
               </div>
             </div>
 
-            <div class="workspace-dock">
+            <div
+              id="dock-resize"
+              class="dock-resize"
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="调整工作区面板高度"
+              data-i18n-aria-label-zh="调整工作区面板高度"
+              data-i18n-aria-label-en="Resize workspace panel"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="42"
+              tabindex="0"
+              title="拖动调整面板高度，双击复位"
+              data-i18n-title-zh="拖动调整面板高度，双击复位"
+              data-i18n-title-en="Drag to resize the panel, double-click to reset"
+            ><span class="dock-resize-grip" aria-hidden="true"></span></div>
+
+            <div id="workspace-dock" class="workspace-dock">
               <div class="event-bar">
                 <span id="event-message">Worker 运行时待命</span>
                 <div class="dock-tabs" role="tablist" aria-label="工作区面板" data-i18n-aria-label-zh="工作区面板" data-i18n-aria-label-en="Workspace panels">
@@ -455,6 +472,21 @@
                     <span class="button-label" data-i18n-zh="会话日志" data-i18n-en="Session log">会话日志</span>
                   </button>
                   <button
+                    id="dock-maximize"
+                    class="dock-tab dock-tab-collapse dock-tab-maximize"
+                    type="button"
+                    aria-pressed="false"
+                    aria-label="放大面板"
+                    data-i18n-aria-label-zh="放大面板"
+                    data-i18n-aria-label-en="Maximize panel"
+                    title="面板占满工作区（终端保持连接）"
+                    data-i18n-title-zh="面板占满工作区（终端保持连接）"
+                    data-i18n-title-en="Expand the panel to fill the workspace (terminal stays connected)"
+                    hidden
+                  >
+                    <span class="button-label" data-i18n-zh="放大" data-i18n-en="Expand">放大</span>
+                  </button>
+                  <button
                     id="dock-collapse"
                     class="dock-tab dock-tab-collapse"
                     type="button"
@@ -487,6 +519,19 @@
                     <input id="file-manager-path" type="text" value="/" autocomplete="off" spellcheck="false" aria-label="当前路径" data-i18n-aria-label-zh="当前路径" data-i18n-aria-label-en="Current path" />
                   </label>
                   <div class="file-actions" aria-label="文件操作" data-i18n-aria-label-zh="文件操作" data-i18n-aria-label-en="File actions">
+                    <button
+                      id="file-tree-toggle"
+                      class="file-action file-tree-drawer-toggle"
+                      type="button"
+                      aria-expanded="false"
+                      aria-controls="file-tree"
+                      aria-label="目录树"
+                      data-i18n-aria-label-zh="目录树"
+                      data-i18n-aria-label-en="Directory tree"
+                      title="显示目录树"
+                      data-i18n-title-zh="显示目录树"
+                      data-i18n-title-en="Show directory tree"
+                    >&#9776;</button>
                     <button id="file-back" class="file-action" type="button" disabled data-i18n-aria-label-zh="返回" data-i18n-aria-label-en="Back" aria-label="返回" title="返回" data-i18n-title-zh="返回" data-i18n-title-en="Back">&#8592;</button>
                     <button id="file-up" class="file-action" type="button" disabled data-i18n-aria-label-zh="上一级" data-i18n-aria-label-en="Up one level" aria-label="上一级" title="上一级" data-i18n-title-zh="上一级" data-i18n-title-en="Up one level">&#8593;</button>
                     <button id="file-home" class="file-action" type="button" disabled data-i18n-aria-label-zh="主目录" data-i18n-aria-label-en="Home" aria-label="主目录" title="主目录" data-i18n-title-zh="主目录" data-i18n-title-en="Home">&#8962;</button>
@@ -497,12 +542,71 @@
                     <button id="file-mkdir" class="file-action file-action-wide" type="button" disabled data-i18n-zh="新建文件夹" data-i18n-en="New folder">新建文件夹</button>
                     <button id="file-rename" class="file-action file-action-wide" type="button" disabled data-i18n-zh="重命名" data-i18n-en="Rename">重命名</button>
                     <button id="file-delete" class="file-action file-action-wide danger" type="button" disabled data-i18n-zh="删除" data-i18n-en="Delete">删除</button>
-                    <input id="file-upload-input" class="sr-only" type="file" tabindex="-1" />
+                    <input id="file-upload-input" class="sr-only" type="file" multiple tabindex="-1" />
                   </div>
                   <div class="file-view-controls">
+                    <button
+                      id="file-filter-toggle"
+                      class="file-action"
+                      type="button"
+                      aria-expanded="false"
+                      aria-controls="file-filter-bar"
+                      aria-label="筛选与排序"
+                      data-i18n-aria-label-zh="筛选与排序"
+                      data-i18n-aria-label-en="Filter and sort"
+                      title="筛选与排序"
+                      data-i18n-title-zh="筛选与排序"
+                      data-i18n-title-en="Filter and sort"
+                    >&#9906;</button>
                     <button id="fullscreen-files" class="file-action" type="button" disabled aria-label="放大文件管理" title="放大文件管理" data-i18n-aria-label-zh="放大文件管理" data-i18n-aria-label-en="Expand file manager" data-i18n-title-zh="放大文件管理" data-i18n-title-en="Expand file manager"></button>
                     <button id="exit-fullscreen-files" class="file-action" type="button" aria-label="退出全屏" title="退出全屏" data-i18n-aria-label-zh="退出全屏" data-i18n-aria-label-en="Exit fullscreen" data-i18n-title-zh="退出全屏" data-i18n-title-en="Exit fullscreen"></button>
                   </div>
+                </div>
+
+                <div id="file-filter-bar" class="file-filter-bar" hidden>
+                  <label class="file-filter-field" for="file-filter">
+                    <span class="sr-only" data-i18n-zh="筛选当前目录" data-i18n-en="Filter this folder">筛选当前目录</span>
+                    <input
+                      id="file-filter"
+                      type="search"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder="筛选当前目录…"
+                      data-i18n-placeholder-zh="筛选当前目录…"
+                      data-i18n-placeholder-en="Filter this folder…"
+                    />
+                  </label>
+                  <label class="file-sort-field" for="file-sort-key">
+                    <span class="sr-only" data-i18n-zh="排序方式" data-i18n-en="Sort by">排序方式</span>
+                    <select id="file-sort-key">
+                      <option value="name" data-i18n-zh="名称" data-i18n-en="Name">名称</option>
+                      <option value="size" data-i18n-zh="大小" data-i18n-en="Size">大小</option>
+                      <option value="mtime" data-i18n-zh="修改时间" data-i18n-en="Modified">修改时间</option>
+                      <option value="type" data-i18n-zh="类型" data-i18n-en="Type">类型</option>
+                      <option value="owner" data-i18n-zh="用户" data-i18n-en="Owner">用户</option>
+                    </select>
+                  </label>
+                  <button
+                    id="file-sort-dir"
+                    class="file-action file-sort-dir"
+                    type="button"
+                    aria-label="切换排序方向"
+                    data-i18n-aria-label-zh="切换排序方向"
+                    data-i18n-aria-label-en="Toggle sort direction"
+                    title="升序 / 降序"
+                    data-i18n-title-zh="升序 / 降序"
+                    data-i18n-title-en="Ascending / descending"
+                  >&#8593;</button>
+                  <span id="file-filter-count" class="file-filter-count" role="status" aria-live="polite"></span>
+                  <button
+                    id="file-filter-clear"
+                    class="file-action file-filter-clear"
+                    type="button"
+                    aria-label="清除筛选"
+                    data-i18n-aria-label-zh="清除筛选"
+                    data-i18n-aria-label-en="Clear filter"
+                    hidden
+                  >&#10005;</button>
                 </div>
 
                 <div class="file-table-wrap">
@@ -527,6 +631,15 @@
                   <div id="file-manager-empty" class="file-manager-state" hidden data-i18n-zh="此目录为空" data-i18n-en="This folder is empty">此目录为空</div>
                   <div id="file-manager-error" class="file-manager-state error" role="alert" hidden></div>
                 </div>
+                <button
+                  id="file-tree-scrim"
+                  class="file-tree-scrim"
+                  type="button"
+                  aria-label="关闭目录树"
+                  data-i18n-aria-label-zh="关闭目录树"
+                  data-i18n-aria-label-en="Close directory tree"
+                  hidden
+                ></button>
                 <div class="file-statusbar">
                   <span id="file-manager-status" role="status" aria-live="polite" data-i18n-zh="连接 SSH 后即可管理文件" data-i18n-en="Connect to SSH to manage files">连接 SSH 后即可管理文件</span>
                   <div id="file-manager-progress" class="file-progress" hidden>
@@ -542,6 +655,42 @@
                       data-i18n-aria-label-en="Cancel file transfer"
                       aria-label="取消文件传输"
                     >取消</button>
+                  </div>
+                </div>
+                <div
+                  id="file-action-sheet"
+                  class="file-action-sheet"
+                  role="dialog"
+                  aria-modal="false"
+                  aria-labelledby="file-action-sheet-title"
+                  hidden
+                >
+                  <div class="file-action-sheet-panel">
+                    <header class="file-action-sheet-header">
+                      <div class="file-action-sheet-heading">
+                        <strong id="file-action-sheet-title">操作</strong>
+                        <span id="file-action-sheet-subtitle" class="file-action-sheet-subtitle"></span>
+                      </div>
+                      <button
+                        id="file-action-sheet-close"
+                        class="file-action-sheet-close"
+                        type="button"
+                        aria-label="关闭操作菜单"
+                        data-i18n-aria-label-zh="关闭操作菜单"
+                        data-i18n-aria-label-en="Close action menu"
+                      >&#10005;</button>
+                    </header>
+                    <div class="file-action-sheet-grid">
+                      <button type="button" data-file-sheet="open" data-i18n-zh="打开" data-i18n-en="Open">打开</button>
+                      <button type="button" data-file-sheet="download" data-i18n-zh="下载" data-i18n-en="Download">下载</button>
+                      <button type="button" data-file-sheet="rename" data-i18n-zh="重命名" data-i18n-en="Rename">重命名</button>
+                      <button type="button" data-file-sheet="delete" class="danger" data-i18n-zh="删除" data-i18n-en="Delete">删除</button>
+                      <button type="button" data-file-sheet="new-folder" data-i18n-zh="新建文件夹" data-i18n-en="New folder">新建文件夹</button>
+                      <button type="button" data-file-sheet="upload" data-i18n-zh="上传文件" data-i18n-en="Upload file">上传文件</button>
+                      <button type="button" data-file-sheet="preview" data-i18n-zh="预览" data-i18n-en="Preview">预览</button>
+                      <button type="button" data-file-sheet="properties" data-i18n-zh="属性" data-i18n-en="Properties">属性</button>
+                      <button type="button" data-file-sheet="refresh" data-i18n-zh="刷新目录" data-i18n-en="Refresh folder">刷新目录</button>
+                    </div>
                   </div>
                 </div>
               </section>
@@ -634,6 +783,38 @@
             <button id="confirm-process-kill" class="primary-button is-danger" value="confirm" type="submit" data-i18n-zh="确定结束" data-i18n-en="Terminate">确定结束</button>
           </div>
         </form>
+      </dialog>
+
+      <dialog id="file-preview-dialog" class="file-dialog file-preview-dialog" aria-labelledby="file-preview-title">
+        <header class="file-dialog-header">
+          <div>
+            <p class="eyebrow">PREVIEW</p>
+            <h2 id="file-preview-title">预览</h2>
+          </div>
+          <button id="file-preview-close" class="file-dialog-close" type="button" aria-label="关闭预览" data-i18n-aria-label-zh="关闭预览" data-i18n-aria-label-en="Close preview">&#10005;</button>
+        </header>
+        <div class="file-preview-body">
+          <img id="file-preview-image" alt="" hidden />
+          <pre id="file-preview-text" hidden></pre>
+        </div>
+        <footer class="file-dialog-actions">
+          <button id="file-preview-download" class="secondary-button" type="button" data-i18n-zh="下载文件" data-i18n-en="Download file">下载文件</button>
+          <button id="file-preview-dismiss" class="primary-button" type="button" data-i18n-zh="关闭" data-i18n-en="Close">关闭</button>
+        </footer>
+      </dialog>
+
+      <dialog id="file-properties-dialog" class="file-dialog file-properties-dialog" aria-labelledby="file-properties-title">
+        <header class="file-dialog-header">
+          <div>
+            <p class="eyebrow">PROPERTIES</p>
+            <h2 id="file-properties-title">属性</h2>
+          </div>
+          <button id="file-properties-close" class="file-dialog-close" type="button" aria-label="关闭属性" data-i18n-aria-label-zh="关闭属性" data-i18n-aria-label-en="Close properties">&#10005;</button>
+        </header>
+        <dl id="file-properties-list" class="file-properties-list"></dl>
+        <footer class="file-dialog-actions">
+          <button id="file-properties-dismiss" class="primary-button" type="button" data-i18n-zh="关闭" data-i18n-en="Close">关闭</button>
+        </footer>
       </dialog>
     </div>
     <script type="module" src="/src/main.ts"></script>

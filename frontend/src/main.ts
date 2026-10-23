@@ -291,6 +291,13 @@ const ui = {
   resourceNetworkRateDown: element<HTMLElement>('resource-network-rate-down'),
   resourceNetworkSparkline: element<HTMLCanvasElement>('resource-network-sparkline'),
   terminalCard: element<HTMLElement>('terminal-card'),
+  dockResize: element<HTMLElement>('dock-resize'),
+  dockMaximize: element<HTMLButtonElement>('dock-maximize'),
+  workspaceDock: element<HTMLElement>('workspace-dock'),
+  fileTreeToggle: element<HTMLButtonElement>('file-tree-toggle'),
+  fileTreeScrim: element<HTMLButtonElement>('file-tree-scrim'),
+  filePreviewDialog: element<HTMLDialogElement>('file-preview-dialog'),
+  filePropertiesDialog: element<HTMLDialogElement>('file-properties-dialog'),
   terminalStage: element<HTMLElement>('terminal-stage'),
   terminalElement: element<HTMLElement>('terminal'),
   terminalEmpty: element<HTMLElement>('terminal-empty'),
@@ -1332,6 +1339,80 @@ function sendHostKeyDecision(accept: boolean): void {
 type WorkspaceTab = 'files' | 'processes' | 'log';
 let activeWorkspaceTab: WorkspaceTab | null = null;
 
+/* -------------------------------------------------------------------------
+ * Workspace dock sizing
+ *
+ * The dock used to be locked to a 1.618:1 split, which left the file manager
+ * with very little room. It is now a user-resizable panel: drag the handle
+ * (mouse, pen or touch), use the keyboard, double-click to reset, or press the
+ * maximize button to give the panel the whole workspace while the SSH session
+ * keeps running in the (collapsed) terminal above.
+ * ---------------------------------------------------------------------- */
+const DOCK_RATIO_KEY = 'edgessh.dock-ratio';
+const DOCK_MIN_PX = 120;
+const DOCK_TERMINAL_MIN_PX = 96;
+
+function dockDefaultRatio(): number {
+  return window.matchMedia('(max-width: 760px)').matches ? 0.68 : 0.42;
+}
+
+function loadDockRatio(): number {
+  try {
+    const stored = Number(localStorage.getItem(DOCK_RATIO_KEY));
+    if (Number.isFinite(stored) && stored >= 0.18 && stored <= 1) return stored;
+  } catch { /* Storage may be unavailable; fall back to the viewport default. */ }
+  return dockDefaultRatio();
+}
+
+let dockRatio = loadDockRatio();
+let dockMaximized = false;
+let dockDrag: {
+  pointerId: number;
+  startY: number;
+  startHeight: number;
+  cardHeight: number;
+} | null = null;
+
+function dockCardHeight(): number {
+  return ui.terminalCard.getBoundingClientRect().height;
+}
+
+function applyDockRatio(): void {
+  if (dockMaximized || activeWorkspaceTab === null) return;
+  const cardHeight = dockCardHeight();
+  if (cardHeight <= 0) return;
+  const max = Math.max(DOCK_MIN_PX, cardHeight - DOCK_TERMINAL_MIN_PX);
+  const height = Math.min(max, Math.max(DOCK_MIN_PX, Math.round(cardHeight * dockRatio)));
+  ui.terminalCard.style.setProperty('--dock-height', `${height}px`);
+  ui.dockResize.setAttribute('aria-valuenow', String(Math.round((height / cardHeight) * 100)));
+}
+
+function setDockRatio(ratio: number, persist = true): void {
+  dockRatio = Math.min(1, Math.max(0.18, ratio));
+  applyDockRatio();
+  if (persist) {
+    try { localStorage.setItem(DOCK_RATIO_KEY, String(dockRatio)); } catch { /* Ignore quota/private mode. */ }
+  }
+}
+
+function setDockMaximized(maximized: boolean): void {
+  dockMaximized = maximized;
+  ui.terminalCard.classList.toggle('dock-maximized', maximized);
+  ui.dockMaximize.setAttribute('aria-pressed', String(maximized));
+  ui.dockMaximize.title = maximized
+    ? bilingual('还原面板高度', 'Restore panel height')
+    : bilingual('面板占满工作区（终端保持连接）', 'Expand the panel to fill the workspace (terminal stays connected)');
+  if (!maximized) applyDockRatio();
+  fitTerminal(true);
+}
+
+function setTreeDrawer(open: boolean): void {
+  ui.fileManagerPanel.classList.toggle('tree-open', open);
+  ui.fileTreeToggle.setAttribute('aria-expanded', String(open));
+  ui.fileTreeScrim.hidden = !open;
+  if (open) ui.fileTree.querySelector<HTMLElement>('.file-tree-row')?.focus();
+}
+
 function setWorkspaceTab(tab: WorkspaceTab | null, focus = false, rovingTab = tab ?? activeWorkspaceTab ?? 'files'): void {
   const filesActive = tab === 'files';
   const processesActive = tab === 'processes';
@@ -1342,6 +1423,13 @@ function setWorkspaceTab(tab: WorkspaceTab | null, focus = false, rovingTab = ta
   ui.processManagerPanel.hidden = !processesActive;
   ui.eventLogContainer.hidden = !logActive;
   ui.dockCollapse.hidden = tab === null;
+  ui.dockMaximize.hidden = tab === null;
+  if (tab === null) {
+    dockMaximized = false;
+    ui.terminalCard.classList.remove('dock-maximized');
+    ui.dockMaximize.setAttribute('aria-pressed', 'false');
+    setTreeDrawer(false);
+  }
   ui.fileManagerTab.setAttribute('aria-selected', String(filesActive));
   ui.processManagerTab.setAttribute('aria-selected', String(processesActive));
   ui.eventToggle.setAttribute('aria-selected', String(logActive));
@@ -1353,7 +1441,10 @@ function setWorkspaceTab(tab: WorkspaceTab | null, focus = false, rovingTab = ta
   ui.eventToggle.tabIndex = rovingTab === 'log' ? 0 : -1;
   if (logActive) requestAnimationFrame(() => { ui.eventLog.scrollTop = ui.eventLog.scrollHeight; });
   if (focus) ({ files: ui.fileManagerTab, processes: ui.processManagerTab, log: ui.eventToggle })[rovingTab].focus();
-  requestAnimationFrame(() => fitTerminal(true));
+  requestAnimationFrame(() => {
+    applyDockRatio();
+    fitTerminal(true);
+  });
 }
 
 function toggleWorkspaceTab(tab: WorkspaceTab): void {
@@ -2195,6 +2286,112 @@ ui.processManagerTab.addEventListener('click', () => toggleWorkspaceTab('process
 ui.eventToggle.addEventListener('click', () => toggleWorkspaceTab('log'));
 ui.eventMessage.addEventListener('click', () => toggleWorkspaceTab('log'));
 ui.dockCollapse.addEventListener('click', () => setWorkspaceTab(null));
+
+ui.dockMaximize.addEventListener('click', () => setDockMaximized(!dockMaximized));
+
+ui.dockResize.addEventListener('pointerdown', (event) => {
+  if (event.pointerType === 'mouse' && event.button !== 0) return;
+  const cardHeight = dockCardHeight();
+  if (cardHeight <= 0) return;
+  dockDrag = {
+    pointerId: event.pointerId,
+    startY: event.clientY,
+    startHeight: ui.workspaceDock.getBoundingClientRect().height,
+    cardHeight,
+  };
+  ui.terminalCard.classList.add('is-resizing');
+  ui.dockResize.setPointerCapture(event.pointerId);
+  event.preventDefault();
+});
+
+ui.dockResize.addEventListener('pointermove', (event) => {
+  if (!dockDrag || event.pointerId !== dockDrag.pointerId) return;
+  const next = dockDrag.startHeight + (dockDrag.startY - event.clientY);
+  if (next >= dockDrag.cardHeight - 48) {
+    if (!dockMaximized) setDockMaximized(true);
+    return;
+  }
+  if (dockMaximized) setDockMaximized(false);
+  const max = Math.max(DOCK_MIN_PX, dockDrag.cardHeight - DOCK_TERMINAL_MIN_PX);
+  const height = Math.min(max, Math.max(DOCK_MIN_PX, Math.round(next)));
+  ui.terminalCard.style.setProperty('--dock-height', `${height}px`);
+  ui.dockResize.setAttribute('aria-valuenow', String(Math.round((height / dockDrag.cardHeight) * 100)));
+  fitTerminal(false);
+});
+
+function endDockDrag(event: PointerEvent): void {
+  if (!dockDrag || event.pointerId !== dockDrag.pointerId) return;
+  const { cardHeight } = dockDrag;
+  dockDrag = null;
+  ui.terminalCard.classList.remove('is-resizing');
+  if (ui.dockResize.hasPointerCapture(event.pointerId)) ui.dockResize.releasePointerCapture(event.pointerId);
+  if (!dockMaximized && cardHeight > 0) {
+    setDockRatio(ui.workspaceDock.getBoundingClientRect().height / cardHeight);
+  }
+  fitTerminal(true);
+}
+
+ui.dockResize.addEventListener('pointerup', endDockDrag);
+ui.dockResize.addEventListener('pointercancel', endDockDrag);
+
+ui.dockResize.addEventListener('dblclick', () => {
+  setDockMaximized(false);
+  setDockRatio(dockDefaultRatio());
+  fitTerminal(true);
+});
+
+ui.dockResize.addEventListener('keydown', (event) => {
+  const cardHeight = dockCardHeight();
+  if (cardHeight <= 0) return;
+  const current = ui.workspaceDock.getBoundingClientRect().height;
+  if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+    event.preventDefault();
+    setDockMaximized(false);
+    setDockRatio((current + (event.key === 'ArrowUp' ? 32 : -32)) / cardHeight);
+    fitTerminal(true);
+  } else if (event.key === 'Home') {
+    event.preventDefault();
+    setDockMaximized(false);
+    setDockRatio(0.2);
+    fitTerminal(true);
+  } else if (event.key === 'End') {
+    event.preventDefault();
+    setDockMaximized(true);
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    setDockMaximized(false);
+    setDockRatio(dockDefaultRatio());
+    fitTerminal(true);
+  }
+});
+
+const narrowViewport = window.matchMedia('(max-width: 760px)');
+ui.fileTreeToggle.addEventListener('click', () => {
+  setTreeDrawer(!ui.fileManagerPanel.classList.contains('tree-open'));
+});
+ui.fileTreeScrim.addEventListener('click', () => setTreeDrawer(false));
+ui.fileTree.addEventListener('click', (clickEvent) => {
+  if (!ui.fileManagerPanel.classList.contains('tree-open')) return;
+  if (!(clickEvent.target instanceof Element)) return;
+  // The sidebar's own collapse button should dismiss the mobile drawer instead
+  // of flipping the persisted desktop collapse preference.
+  if (clickEvent.target.closest('.file-tree-collapse') && narrowViewport.matches) {
+    clickEvent.preventDefault();
+    clickEvent.stopImmediatePropagation();
+    setTreeDrawer(false);
+    ui.fileTreeToggle.focus();
+    return;
+  }
+  if (clickEvent.target.closest('.file-tree-row')) {
+    window.setTimeout(() => setTreeDrawer(false), 120);
+  }
+}, { capture: true });
+narrowViewport.addEventListener('change', (changeEvent) => {
+  if (!changeEvent.matches) setTreeDrawer(false);
+});
+new ResizeObserver(() => {
+  if (activeWorkspaceTab !== null && !dockDrag) applyDockRatio();
+}).observe(ui.terminalCard);
 ui.eventLogClose.addEventListener('click', () => setWorkspaceTab(null));
 ui.eventLogClear.addEventListener('click', () => {
   ui.eventLog.replaceChildren();
@@ -2250,7 +2447,11 @@ window.addEventListener('beforeunload', () => {
 
 document.addEventListener('keydown', (keyEvent) => {
   if (keyEvent.key !== 'Escape' || ui.hostKeyDialog.open) return;
-  if (panelOpen) {
+  if (ui.fileManagerPanel.classList.contains('tree-open')) {
+    keyEvent.preventDefault();
+    setTreeDrawer(false);
+    ui.fileTreeToggle.focus();
+  } else if (panelOpen) {
     setPanelOpen(false);
     ui.panelToggle.focus();
   } else if (activeWorkspaceTab !== null) {
@@ -2276,7 +2477,7 @@ async function initialize(): Promise<void> {
   initializeCompatibilityAPI();
   applyURLParameters();
   // 两个视图共用指纹确认与通知，不能随隐藏的终端容器一起消失。
-  document.body.append(ui.hostKeyDialog, ui.toastRegion);
+  document.body.append(ui.hostKeyDialog, ui.toastRegion, ui.filePreviewDialog, ui.filePropertiesDialog);
   filePage = new FilePage(ui.fileManagerPanel, {
     connect: async (host) => {
       const loading = applyProfile(host);

@@ -42,7 +42,7 @@ body[data-view='files'] { height: auto; min-height: 100%; overflow-y: auto; back
 .files-browser-heading strong svg { color: var(--home-accent-hover); }
 .files-browser-heading > span { color: var(--home-muted); font: 11px var(--home-mono); }
 .files-panel-slot { display: grid; min-width: 0; height: clamp(390px, calc(100dvh - 490px), 850px); }
-.files-page .file-manager { grid-template-rows: auto minmax(0, 1fr) auto; }
+.files-page .file-manager { grid-template-rows: auto auto minmax(0, 1fr) auto; }
 .files-page .file-toolbar { flex-wrap: wrap; gap: 12px; padding: 14px 18px; }
 .files-page .file-path-field { flex-basis: 100%; }
 .files-page .file-path-field input { height: 40px; font-size: 13px; padding-inline: 12px; }
@@ -79,8 +79,19 @@ body[data-view='files'] .home-account { margin-left: auto; }
   .files-page { padding: 24px; }
   .files-connection { flex-wrap: wrap; }
   .files-connection-meta { flex-basis: 100%; flex-direction: row; align-items: center; justify-content: space-between; }
-  .files-page .file-manager { grid-template-columns: 180px minmax(0, 1fr); }
   .files-page .file-table :is(th, td):nth-child(n+5) { display: none; }
+}
+@media (min-width: 761px) and (max-width: 1100px) {
+  .files-page .file-manager { grid-template-columns: 180px minmax(0, 1fr); }
+}
+/* Narrow screens use the shared off-canvas tree drawer (see style.css). */
+@media (max-width: 760px) {
+  .files-page .file-manager {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "toolbar" "filter" "table" "status";
+  }
+  .files-page .file-manager:has(> .file-tree.is-collapsed) { grid-template-columns: minmax(0, 1fr); }
+  .files-panel-slot { height: min(76dvh, 680px); }
 }
 @media (max-width: 600px) {
   .files-page { padding: 20px 12px; gap: 16px; }
@@ -102,15 +113,11 @@ body[data-view='files'] .home-account { margin-left: auto; }
   #dashboard .files-page .file-action { min-width: 44px; height: 44px; }
   #dashboard .files-page .file-action-wide { padding-inline: 10px; }
   .files-page .file-action-separator { display: none; }
-  .files-page .file-manager { grid-template-columns: minmax(0, 1fr); grid-template-areas: "toolbar" "table" "status"; }
-  .files-page .file-manager > .file-tree { display: none; }
-  .files-page .file-manager:has(> .file-tree.is-collapsed) { grid-template-columns: minmax(0, 1fr); }
   .files-page .file-table th:first-child { width: 48%; }
   .files-page .file-table th:nth-child(2) { width: 20%; }
   .files-page .file-table th:nth-child(4) { width: 32%; }
   .files-page .file-table :is(th, td):nth-child(3) { display: none; }
   .files-page .file-table td { height: 48px; }
-  .files-panel-slot { height: 560px; }
   .files-footer { flex-direction: column; gap: 6px; }
   #dashboard .home-rail { gap: 4px; padding-inline: 8px; justify-content: space-between; }
   #dashboard .rail-item { padding-inline: 8px; font-size: 11px; }
