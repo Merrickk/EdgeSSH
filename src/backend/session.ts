@@ -53,6 +53,7 @@ import {
   CONTAINER_MONITOR_COMMAND, CONTAINER_SNAPSHOT_MARKER, parseContainerFrame,
   retainContainerMarkerPrefix, buildContainerActionCommand,
 } from './container-command';
+import { buildCronActionCommand } from './cron-command';
 import { ForwardChannel } from '../forwarding/channel';
 
 type Cipher = SSHAESGCMCipher | SSHAESCTRCipher;
@@ -95,6 +96,23 @@ interface PendingProcessKillChannel {
   finalized: boolean;
 }
 interface PendingContainerActionChannel {
+  readonly channelID: number;
+  readonly channel: SSHChannel;
+  readonly requestId: string;
+  readonly command: string;
+  timeout: ReturnType<typeof setTimeout> | null;
+  cancelled: boolean;
+  openConfirmed: boolean;
+  stdoutDecoder: TextDecoder;
+  stderrDecoder: TextDecoder;
+  stdout: string;
+  stderr: string;
+  stdoutBytes: number;
+  stderrBytes: number;
+  finalized: boolean;
+}
+
+interface PendingCronActionChannel {
   readonly channelID: number;
   readonly channel: SSHChannel;
   readonly requestId: string;
@@ -233,6 +251,10 @@ export class SSHSession {
   private containerDockerMissing = false;
   private containerStderr = '';
   private readonly pendingContainerActionChannels = new Map<number, PendingContainerActionChannel>();
+  // ── Cron manager (crontab & script tasks) ───────────────────────
+  private cronWebSocket: WebSocket | null = null;
+  private cronAttachUrl = '';
+  private readonly pendingCronActionChannels = new Map<number, PendingCronActionChannel>();
   private systemProbe: PendingSystemProbeChannel | null = null;
   private ignoreNextKexPacket = false;
   private inputQueue: Uint8Array[] = [];
@@ -825,6 +847,20 @@ export class SSHSession {
             await this.sendAuxiliaryChannelClose(channel);
           }
         }
+      } else if (this.pendingCronActionChannels.has(channelID)) {
+        const action = this.pendingCronActionChannels.get(channelID)!;
+        action.openConfirmed = true;
+        if (action.timeout) { clearTimeout(action.timeout); action.timeout = null; }
+        if (action.cancelled || this.cronWebSocket === null) {
+          await this.sendAuxiliaryChannelClose(channel);
+        } else {
+          try {
+            await this.sendEncrypted(channel.buildExecRequest(action.command));
+          } catch (error) {
+            this.finalizeCronAction(action, error instanceof Error ? error.message : String(error));
+            await this.sendAuxiliaryChannelClose(channel);
+          }
+        }
       } else {
         // An attachment WebSocket may close while its channel is opening.
         this.clearPendingSFTPChannelOpen(channel);
@@ -857,6 +893,8 @@ export class SSHSession {
         if (kill) this.finalizeProcessKill(kill, 'SSH server rejected the kill channel');
         const action = this.pendingContainerActionChannels.get(channelID);
         if (action) this.finalizeContainerAction(action, 'SSH server rejected the container action channel');
+        const cronAction = this.pendingCronActionChannels.get(channelID);
+        if (cronAction) this.finalizeCronAction(cronAction, 'SSH server rejected the cron action channel');
       }
       return;
     }
@@ -935,6 +973,8 @@ export class SSHSession {
         this.appendKillOutput(this.pendingProcessKillChannels.get(channelID)!, output, false);
       } else if (this.pendingContainerActionChannels.has(channelID)) {
         this.appendContainerActionOutput(this.pendingContainerActionChannels.get(channelID)!, output, false);
+      } else if (this.pendingCronActionChannels.has(channelID)) {
+        this.appendCronActionOutput(this.pendingCronActionChannels.get(channelID)!, output, false);
       }
       await this.adjustLocalWindow(channel);
       return;
@@ -959,6 +999,8 @@ export class SSHSession {
         this.appendKillOutput(this.pendingProcessKillChannels.get(channelID)!, output, true);
       } else if (this.pendingContainerActionChannels.has(channelID)) {
         this.appendContainerActionOutput(this.pendingContainerActionChannels.get(channelID)!, output, true);
+      } else if (this.pendingCronActionChannels.has(channelID)) {
+        this.appendCronActionOutput(this.pendingCronActionChannels.get(channelID)!, output, true);
       }
       await this.adjustLocalWindow(channel);
       return;
@@ -1012,6 +1054,8 @@ export class SSHSession {
           if (kill) this.finalizeProcessKill(kill);
           const action = this.pendingContainerActionChannels.get(channelID);
           if (action) this.finalizeContainerAction(action);
+          const cronAction = this.pendingCronActionChannels.get(channelID);
+          if (cronAction) this.finalizeCronAction(cronAction);
         }
       }
       return;
@@ -1032,6 +1076,7 @@ export class SSHSession {
     if (this.sftpAttachUrl) this.sendJson({ type: 'sftp_attach', url: this.sftpAttachUrl });
     if (this.processAttachUrl) this.sendJson({ type: 'process_attach', url: this.processAttachUrl });
     if (this.containerAttachUrl) this.sendJson({ type: 'container_attach', url: this.containerAttachUrl });
+    if (this.cronAttachUrl) this.sendJson({ type: 'cron_attach', url: this.cronAttachUrl });
     void this.openSystemProbeChannel().catch(() => undefined);
     void this.flushInput();
   }
@@ -1422,6 +1467,153 @@ export class SSHSession {
 
   private sendContainerError(message: string): void {
     this.sendContainerJson({ type: 'container_error', message });
+  }
+
+  // ── Cron manager ────────────────────────────────────────────────
+
+  attachCronWebSocket(ws: WebSocket): void {
+    if (this.phase === 'closed' || this.cronWebSocket) {
+      try { ws.close(1008, 'Cron monitor is unavailable'); } catch { /* already closed */ }
+      return;
+    }
+    this.cronWebSocket = ws;
+    this.sendCronJson({ type: 'cron_ready' });
+  }
+
+  detachCronWebSocket(ws: WebSocket): void {
+    if (this.cronWebSocket !== ws) return;
+    this.cronWebSocket = null;
+    for (const action of [...this.pendingCronActionChannels.values()]) {
+      action.cancelled = true;
+      if (action.timeout) { clearTimeout(action.timeout); action.timeout = null; }
+      if (action.openConfirmed) {
+        if (action.channel.isOpen() && !action.channel.hasSentClose()) void this.sendAuxiliaryChannelClose(action.channel);
+        this.finalizeCronAction(action, 'Cron monitor disconnected');
+      }
+    }
+  }
+
+  setCronAttachUrl(url: string): void {
+    this.cronAttachUrl = url;
+  }
+
+  async handleCronClientMessage(message: string | ArrayBuffer): Promise<void> {
+    if (this.phase === 'closed' || !this.cronWebSocket) return;
+    if (message instanceof ArrayBuffer || message.length > 32 * 1024) throw new Error('Invalid cron message');
+    let decoded: unknown;
+    try { decoded = JSON.parse(message); } catch { throw new Error('Invalid cron JSON'); }
+    if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) throw new Error('Invalid cron message');
+    const value = decoded as Record<string, unknown>;
+    if (value.type === 'ping') { this.sendCronJson({ type: 'pong' }); return; }
+    if (value.type === 'cron_action') {
+      const requestId = value.requestId;
+      if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 64) {
+        throw new Error('Invalid cron-action request: requestId is missing or too long');
+      }
+      const action = value.action;
+      const payload = typeof value.payload === 'object' && value.payload !== null ? value.payload as Record<string, unknown> : {};
+      const command = buildCronActionCommand(action, payload);
+      if (!command) throw new Error('Invalid or unsupported cron action');
+      await this.openCronActionChannel(requestId, command);
+      return;
+    }
+    throw new Error('Unsupported cron message');
+  }
+
+  private async openCronActionChannel(requestId: string, command: string): Promise<void> {
+    if (!this.cronWebSocket) throw new Error('Cron WebSocket is not attached');
+    if (this.phase !== 'ready') throw new Error('SSH connection is not ready');
+    if (this.pendingCronActionChannels.size >= 4) throw new Error('Too many cron actions in progress');
+    const channelID = this.nextChannelID++;
+    const channel = new SSHChannel();
+    const pending: PendingCronActionChannel = {
+      channelID,
+      channel,
+      requestId,
+      command,
+      timeout: null,
+      cancelled: false,
+      openConfirmed: false,
+      stdoutDecoder: new TextDecoder(),
+      stderrDecoder: new TextDecoder(),
+      stdout: '',
+      stderr: '',
+      stdoutBytes: 0,
+      stderrBytes: 0,
+      finalized: false,
+    };
+    this.channels.set(channelID, channel);
+    this.pendingCronActionChannels.set(channelID, pending);
+    try {
+      await this.sendEncrypted(channel.buildOpenSession(channelID));
+      pending.timeout = setTimeout(() => this.expirePendingCronAction(pending), CONTAINER_ACTION_CHANNEL_OPEN_TIMEOUT_MS);
+    } catch (error) {
+      this.clearPendingCronAction(channel);
+      this.channels.delete(channelID);
+      this.pendingCronActionChannels.delete(channelID);
+      throw error;
+    }
+  }
+
+  private appendCronActionOutput(action: PendingCronActionChannel, output: Uint8Array, isStderr: boolean): void {
+    if (action.finalized) return;
+    const budget = CONTAINER_ACTION_MAX_OUTPUT_BYTES - (isStderr ? action.stderrBytes : action.stdoutBytes);
+    if (budget <= 0) return;
+    const slice = output.byteLength > budget ? output.subarray(0, budget) : output;
+    const text = (isStderr ? action.stderrDecoder : action.stdoutDecoder).decode(slice, { stream: true });
+    if (isStderr) { action.stderr += text; action.stderrBytes += slice.byteLength; }
+    else { action.stdout += text; action.stdoutBytes += slice.byteLength; }
+    if (action.timeout === null && action.openConfirmed) {
+      action.timeout = setTimeout(() => this.expirePendingCronAction(action), CONTAINER_ACTION_TIMEOUT_MS);
+    }
+  }
+
+  private expirePendingCronAction(action: PendingCronActionChannel): void {
+    if (action.finalized) return;
+    if (action.timeout) { clearTimeout(action.timeout); action.timeout = null; }
+    this.finalizeCronAction(action, 'The cron action timed out');
+    if (action.channel.isOpen()) void this.sendAuxiliaryChannelClose(action.channel);
+  }
+
+  private finalizeCronAction(action: PendingCronActionChannel, error?: string): void {
+    if (action.finalized) return;
+    action.finalized = true;
+    if (action.timeout) { clearTimeout(action.timeout); action.timeout = null; }
+    this.clearPendingCronAction(action.channel);
+    this.pendingCronActionChannels.delete(action.channelID);
+    const stdout = action.stdoutDecoder.decode();
+    const stderr = action.stderrDecoder.decode();
+    const exitStatus = error ? null : 0;
+    this.sendCronJson({
+      type: 'cron_action_result',
+      requestId: action.requestId,
+      ok: !error && exitStatus === 0,
+      exitStatus,
+      stdout: stdout.slice(0, CONTAINER_ACTION_MAX_OUTPUT_BYTES),
+      stderr: (error ?? stderr).slice(0, CONTAINER_ACTION_MAX_OUTPUT_BYTES),
+    });
+  }
+
+  private clearPendingCronAction(channel: SSHChannel): void {
+    for (const [id, action] of this.pendingCronActionChannels) {
+      if (action.channel === channel) {
+        if (action.timeout) { clearTimeout(action.timeout); action.timeout = null; }
+        this.pendingCronActionChannels.delete(id);
+        return;
+      }
+    }
+  }
+
+  private sendCronJson(message: Record<string, unknown>): void {
+    try {
+      if (this.cronWebSocket?.readyState === WebSocket.OPEN) {
+        this.cronWebSocket.send(JSON.stringify(message));
+      }
+    } catch { /* The cron socket closed between check and send */ }
+  }
+
+  private sendCronError(message: string): void {
+    this.sendCronJson({ type: 'cron_error', message });
   }
 
   private async openProcessKillChannel(pid: number, requestId: string): Promise<void> {

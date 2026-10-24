@@ -318,3 +318,67 @@ test('会话授权失败后可重试，文件操作保持禁用', async ({ page 
   await expect(page.locator('#file-upload')).toBeDisabled();
   await expect(page.locator('#files-host')).toBeEnabled();
 });
+
+test('1Panel 风格路径面包屑导航与手填切换', async ({ page }, testInfo) => {
+  await fileFixture(page);
+  await connectFiles(page);
+
+  // 1. 面包屑默认分解当前路径：[根目录 /] > [root]
+  const crumbs = page.locator('#file-breadcrumbs .file-breadcrumb-btn');
+  await expect(crumbs).toHaveCount(2);
+  await expect(crumbs.nth(0)).toHaveText('根目录 /');
+  await expect(crumbs.nth(1)).toHaveText('root');
+
+  // 进入 backups 目录
+  await page.locator('.files-list [role="treeitem"]').filter({ hasText: 'backups' }).dblclick();
+  await expect(page.locator('#file-manager-path')).toHaveValue('/root/backups');
+
+  // 面包屑自动更新为 3 级：[根目录 /] > [root] > [backups]
+  await expect(crumbs).toHaveCount(3);
+  await expect(crumbs.nth(2)).toHaveText('backups');
+
+  // 点击第 2 级「root」段，一键快速跳转回 /root
+  await crumbs.nth(1).click();
+  await expect(page.locator('#file-manager-path')).toHaveValue('/root');
+  await expect(crumbs).toHaveCount(2);
+
+  // 点击铅笔按钮切换为手动输入框
+  await page.locator('#file-path-edit-toggle').click();
+  await expect(page.locator('.file-path-field')).toBeVisible();
+  await expect(page.locator('#file-breadcrumbs')).toBeHidden();
+
+  // 再次点击切回面包屑
+  await page.locator('#file-path-edit-toggle').click();
+  await expect(page.locator('#file-breadcrumbs')).toBeVisible();
+  await expect(page.locator('.file-path-container')).not.toHaveClass(/is-manual/);
+
+  await page.screenshot({ path: testInfo.outputPath('file-breadcrumbs.png') });
+});
+
+test('1Panel 风格新建文件并立即在线编辑保存', async ({ page }) => {
+  const fixture = await fileFixture(page);
+  await connectFiles(page);
+
+  // 触发新建文件
+  page.once('dialog', (dialog) => dialog.accept('deploy.yaml'));
+  await page.locator('#file-new-file').click();
+
+  // 自动弹出在线编辑器，填入内容并保存
+  const editorDialog = page.locator('#file-editor-dialog');
+  await expect(editorDialog).toBeVisible();
+  await expect(page.locator('#file-editor-title')).toHaveText('deploy.yaml');
+  await expect(page.locator('#file-editor-path')).toHaveText('/root/deploy.yaml');
+
+  await page.locator('#file-editor-area').fill('version: "3"\nservices:\n  web:\n    image: nginx\n');
+  await page.locator('#file-editor-save').click();
+  await expect(page.locator('#file-editor-status')).toHaveText('已保存');
+
+  // 保存走上传通道写回服务器
+  await expect.poll(() => Buffer.concat(fixture.uploaded).toString('utf8')).toContain('services:');
+  expect(fixture.calls).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'sftp_upload_start', path: '/root/deploy.yaml' }),
+  ]));
+
+  await page.locator('#file-editor-dismiss').click();
+  await expect(editorDialog).toBeHidden();
+});

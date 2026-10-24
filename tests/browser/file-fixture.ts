@@ -36,6 +36,8 @@ export async function fileFixture(page: Page, options: FileFixtureOptions = {}) 
   const uploaded: Buffer[] = [];
   const containerSockets: WebSocketRoute[] = [];
   const containerCalls: Array<Record<string, any>> = [];
+  const cronSockets: WebSocketRoute[] = [];
+  const cronCalls: Array<Record<string, any>> = [];
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/auth/me') return route.fulfill({ json: { account: { username: 'Administrator' }, provider: 'cloudflare' } });
@@ -55,6 +57,7 @@ export async function fileFixture(page: Page, options: FileFixtureOptions = {}) 
       ws.send(JSON.stringify({ type: 'sftp_attach', url: '/api/sftp?session=test&token=test' }));
       ws.send(JSON.stringify({ type: 'process_attach', url: '/api/processes?session=test&token=test' }));
       ws.send(JSON.stringify({ type: 'container_attach', url: '/api/containers?session=test&token=test' }));
+      ws.send(JSON.stringify({ type: 'cron_attach', url: '/api/cron?session=test&token=test' }));
     };
     ws.onMessage((raw) => {
       if (typeof raw !== 'string') { calls.push({ type: 'terminal-input', data: raw.toString() }); return; }
@@ -132,7 +135,10 @@ export async function fileFixture(page: Page, options: FileFixtureOptions = {}) 
           'aaa111bbb222\tdb-postgres\tpostgres:16\texited\tExited (0) 2 hours ago\t2026-09-18 12:00\t',
           '__CF_WEBSSH_STATS__',
           'abc123def456\t0.05%\t32MiB / 1GiB\t3.12%\t1.2kB / 3.4kB\t8MB / 12MB\t12',
-          '__CF_WEBSSH_IMAGES__7',
+          '__CF_WEBSSH_IMAGES__2',
+          '__CF_WEBSSH_IMAGES_LIST__',
+          'sha256:img111222333\tnginx\t1.25\t142MB\t2 weeks ago',
+          'sha256:img444555666\tpostgres\t16-alpine\t379MB\t1 month ago',
         ].join('\n');
         const snapshot = parseContainerFrame(frame, Date.now());
         send({ type: 'container_snapshot', ...snapshot });
@@ -143,7 +149,56 @@ export async function fileFixture(page: Page, options: FileFixtureOptions = {}) 
           send({ type: 'container_action_result', requestId: message.requestId, ok: true, exitStatus: 0, stdout: '2026-09-23 10:00:01 GET /\n', stderr: '' });
           return;
         }
+        if (message.action === 'inspect') {
+          const inspectData = [{
+            Id: message.target,
+            Config: {
+              Image: 'nginx:1.25',
+              Labels: {
+                'com.docker.compose.project.working_dir': '/opt/web-app',
+                'com.docker.compose.service': 'web-nginx',
+              },
+            },
+          }];
+          send({ type: 'container_action_result', requestId: message.requestId, ok: true, exitStatus: 0, stdout: JSON.stringify(inspectData), stderr: '' });
+          return;
+        }
         send({ type: 'container_action_result', requestId: message.requestId, ok: true, exitStatus: 0, stdout: message.target, stderr: '' });
+      }
+    });
+  });
+  // 计划任务模拟 WebSocket 通道
+  await page.routeWebSocket('**/api/cron**', (ws) => {
+    cronSockets.push(ws);
+    const send = (data: object) => ws.send(JSON.stringify(data));
+    let crontabText = [
+      '# [EdgeSSH:id=task-1:name=5q+P5pel5pWw5o2u5aSH5Lu9:type=script:script=L3Jvb3Qvc2NyaXB0cy9iYWNrdXAuc2g=:enabled=1]',
+      '0 3 * * * /bin/bash /root/scripts/backup.sh',
+      '',
+      '# 系统日志清理',
+      '0 2 * * 0 /usr/sbin/logrotate /etc/logrotate.conf',
+    ].join('\n');
+
+    ws.onMessage((raw) => {
+      if (typeof raw !== 'string') return;
+      const message = JSON.parse(raw);
+      calls.push(message);
+      if (message.type === 'cron_action') {
+        cronCalls.push(message);
+        if (message.action === 'list') {
+          send({ type: 'cron_action_result', requestId: message.requestId, ok: true, exitStatus: 0, stdout: crontabText, stderr: '' });
+        } else if (message.action === 'save') {
+          crontabText = Buffer.from(message.payload?.base64Data || '', 'base64').toString('utf8');
+          send({ type: 'cron_action_result', requestId: message.requestId, ok: true, exitStatus: 0, stdout: '', stderr: '' });
+        } else if (message.action === 'run') {
+          send({ type: 'cron_action_result', requestId: message.requestId, ok: true, exitStatus: 0, stdout: 'Backup finished successfully. 12 files archived.\n', stderr: '' });
+        } else if (message.action === 'save_script') {
+          send({ type: 'cron_action_result', requestId: message.requestId, ok: true, exitStatus: 0, stdout: '', stderr: '' });
+        } else if (message.action === 'read_script') {
+          send({ type: 'cron_action_result', requestId: message.requestId, ok: true, exitStatus: 0, stdout: '#!/bin/bash\necho "demo script"\n', stderr: '' });
+        } else {
+          send({ type: 'cron_action_result', requestId: message.requestId, ok: true, exitStatus: 0, stdout: 'ok', stderr: '' });
+        }
       }
     });
   });
@@ -155,7 +210,7 @@ export async function fileFixture(page: Page, options: FileFixtureOptions = {}) 
     await page.locator('#rail-files').click();
   }
   return {
-    hosts, calls, sshSockets, sftpSockets, uploaded, directories, containerSockets, containerCalls,
+    hosts, calls, sshSockets, sftpSockets, uploaded, directories, containerSockets, containerCalls, cronSockets, cronCalls,
     async navigate() {
       await page.goto('/');
       await page.locator('#rail-files').click();

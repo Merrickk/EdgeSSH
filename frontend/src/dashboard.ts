@@ -4,6 +4,7 @@ import type { FilePage } from './file-page';
 import type { Snippets } from './snippets';
 import { ForwardPage } from './forward-page';
 import type { ContainerPage } from './container-page';
+import type { CronPage } from './cron-page';
 import { Workbench, type WorkbenchTab } from './workbench';
 import { countryFlag } from './flags';
 import { systemIcon } from './os-icons';
@@ -12,6 +13,7 @@ import './dashboard.css';
 interface DashboardActions {
   files: FilePage;
   containers: ContainerPage;
+  cron: CronPage;
   /** 打开统一工作台并切换到指定面板；终端常驻其中。 */
   openWorkbench(tab: WorkbenchTab): void;
   snippets: Snippets;
@@ -27,6 +29,7 @@ const icons = {
   terminal: '<path d="m5 6 6 6-6 6m8 0h6"/>',
   forward: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M7 14h10m-3-3 3 3-3 3"/>',
   container: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01M11 7.5h6M11 16.5h6"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
   snippets: '<path d="M9 3H7a2 2 0 0 0-2 2v4l-2 3 2 3v4a2 2 0 0 0 2 2h2m6-18h2a2 2 0 0 1 2 2v4l2 3-2 3v4a2 2 0 0 1-2 2h-2"/>',
   folder: '<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M3 9h18"/>',
   shield: '<path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Z"/><path d="m8 12 3 3 5-6"/>',
@@ -68,6 +71,7 @@ export class Dashboard {
           <button class="rail-item selected" id="rail-overview" aria-current="page">${icon('home')}<span>总览</span></button>
           <button class="rail-item" id="rail-files">${icon('folder')}<span>文件</span></button>
           <button class="rail-item" id="rail-containers">${icon('container')}<span>容器</span></button>
+          <button class="rail-item" id="rail-cron">${icon('clock')}<span>计划任务</span></button>
           <button class="rail-item" id="rail-snippets">${icon('snippets')}<span>代码片段</span></button>
           <button class="rail-item" id="rail-forward">${icon('forward')}<span>端口转发</span></button>
           <button class="rail-item" id="quick-connect">${icon('terminal')}<span>快速连接</span></button>
@@ -127,6 +131,7 @@ export class Dashboard {
     document.body.prepend(this.root);
     // 文件 / 容器页的 root 由 Workbench.mount() 收进自己的面板槽，
     // 这里只挂工作台本身，避免两个页面并列把工作台挤出可视区。
+    this.get('.home-content').append(this.actions.cron.root);
     this.get('.home-content').append(this.actions.snippets.page);
     // 转发页放在 .home-content（第二列）；home-layout 只定义了两列。
     this.get('.home-content').append(this.forwarding.root);
@@ -155,6 +160,7 @@ export class Dashboard {
     });
     this.get('#rail-files').addEventListener('click', () => this.showFiles());
     this.get('#rail-containers').addEventListener('click', () => this.showContainers());
+    this.get('#rail-cron').addEventListener('click', () => this.showCron());
     this.get('#rail-snippets').addEventListener('click', () => this.showSnippets());
     this.get('#rail-forward').addEventListener('click', () => this.showForwarding());
     for (const id of ['#quick-connect', '#bottom-quick']) this.get(id).addEventListener('click', () => {
@@ -242,6 +248,9 @@ export class Dashboard {
     this.actions.containers.setHosts(hosts.map((host) => ({
       id: host.id, name: host.name, username: host.username, host: host.host, port: host.port,
     })));
+    this.actions.cron.setHosts(hosts.map((host) => ({
+      id: host.id, name: host.name, username: host.username, host: host.host, port: host.port,
+    })));
     this.forwarding.setHosts(hosts);
     if (this.group && !hosts.some((host) => host.group === this.group)) this.group = '';
     this.renderFilters(); this.renderList();
@@ -261,6 +270,7 @@ export class Dashboard {
   show(): void {
     this.forwarding.hide();
     this.actions.snippets.hide();
+    this.actions.cron.hide();
     this.isHome = true; this.root.hidden = false;
     // 总览内容与三个面板互斥显示。
     for (const selector of ['.home-main-grid', '.home-bottom', '.home-footer']) {
@@ -288,9 +298,9 @@ export class Dashboard {
    * 保留 .home-content 作为三个面板的容器——工作台就挂在这里面。
    */
   enterWorkbench(tab: WorkbenchTab): void {
-    console.log('DBG enterWorkbench', tab);
     this.forwarding.hide();
     this.actions.snippets.hide();
+    this.actions.cron.hide();
     this.isHome = false; this.root.hidden = false;
     this.hideOverviewBlocks();
     document.body.dataset.view = 'workbench';
@@ -300,16 +310,29 @@ export class Dashboard {
     this.actions.snippets.refresh();
   }
 
-  /** 三个面板共用同一层工作台外壳，切换不打断 SSH 会话。 */
   showFiles(): void { this.actions.openWorkbench('files'); }
 
   showContainers(): void { this.actions.openWorkbench('containers'); }
+
+  showCron(): void {
+    if (!this.actions.files.confirmLeave()) return;
+    this.forwarding.hide();
+    this.actions.snippets.hide();
+    this.isHome = false; this.root.hidden = false;
+    this.hideOverviewBlocks();
+    document.getElementById('app')!.hidden = true;
+    document.body.dataset.view = 'cron';
+    this.selectNavigation('rail-cron');
+    this.globe?.setActive(false);
+    this.actions.cron.show();
+  }
 
   showTerminal(): void { this.actions.openWorkbench('terminal'); }
 
   showSnippets(): void {
     if (!this.actions.files.confirmLeave()) return;
     this.forwarding.hide();
+    this.actions.cron.hide();
     // 仅切换视图，不结束 SSH；在片段页编辑后可回到同一会话。
     this.isHome = false; this.root.hidden = false;
     this.hideOverviewBlocks();
@@ -323,6 +346,7 @@ export class Dashboard {
   showForwarding(): void {
     if (!this.actions.files.confirmLeave()) return;
     this.actions.snippets.hide();
+    this.actions.cron.hide();
     this.isHome = false; this.root.hidden = false;
     this.hideOverviewBlocks();
     document.getElementById('app')!.hidden = true;
@@ -347,6 +371,7 @@ export class Dashboard {
   private signedOut(): void {
     this.actions.leaveWorkspace();
     this.actions.snippets.clear();
+    this.actions.cron.hide();
     this.authenticated = false;
     this.get('#account-label').textContent = '未登录';
     const action = this.get<HTMLAnchorElement>('#account-action');

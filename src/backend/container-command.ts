@@ -18,6 +18,8 @@ const MARKER_ESCAPED = '\\137\\137CF_WEBSSH_DOCKER\\137\\137';
  * 只能靠这个显式标记区分，不能用列数或内容猜。
  */
 const STATS_SECTION_PREFIX = '__CF_WEBSSH_STATS__';
+/** 镜像列表段的阶段标记。 */
+const IMAGES_LIST_SECTION_PREFIX = '__CF_WEBSSH_IMAGES_LIST__';
 
 /** 容器状态；与 `docker ps --format '{{.State}}'` 的取值对齐。 */
 export type ContainerState = 'created' | 'running' | 'paused' | 'restarting' | 'removing' | 'exited' | 'dead' | 'unknown';
@@ -39,9 +41,18 @@ export interface ContainerEntry {
   pids: number | null;
 }
 
+export interface ImageEntry {
+  id: string;
+  repository: string;
+  tag: string;
+  size: string;
+  created: string;
+}
+
 export interface ContainerSnapshot {
   containers: ContainerEntry[];
   images: number | null;
+  imageEntries: ImageEntry[];
   timestamp: number;
 }
 
@@ -64,7 +75,7 @@ const TAB = '\t';
  * `docker ps -a`、`docker stats --no-stream`、`docker images -q | wc -l`。
  * 三个子命令都设置了 2>/dev/null 与 `|| true`，缺一项不影响其他项。
  */
-export const CONTAINER_MONITOR_COMMAND = `LC_ALL=C LANG=C sh -c 'while :; do printf "${MARKER_ESCAPED}\\n"; docker ps -a --no-trunc --format "{{.ID}}${TAB}{{.Names}}${TAB}{{.Image}}${TAB}{{.State}}${TAB}{{.Status}}${TAB}{{.CreatedAt}}${TAB}{{.Ports}}" 2>/dev/null || true; printf "${STATS_SECTION_PREFIX}\\n"; docker stats --no-stream --format "{{.ID}}${TAB}{{.CPUPerc}}${TAB}{{.MemUsage}}${TAB}{{.MemPerc}}${TAB}{{.NetIO}}${TAB}{{.BlockIO}}${TAB}{{.PIDs}}" 2>/dev/null || true; printf "__CF_WEBSSH_IMAGES__%s\\n" "$(docker images -q 2>/dev/null | wc -l | tr -d " ")" 2>/dev/null || true; sleep 5; done'`;
+export const CONTAINER_MONITOR_COMMAND = `LC_ALL=C LANG=C sh -c 'while :; do printf "${MARKER_ESCAPED}\\n"; docker ps -a --no-trunc --format "{{.ID}}${TAB}{{.Names}}${TAB}{{.Image}}${TAB}{{.State}}${TAB}{{.Status}}${TAB}{{.CreatedAt}}${TAB}{{.Ports}}" 2>/dev/null || true; printf "${STATS_SECTION_PREFIX}\\n"; docker stats --no-stream --format "{{.ID}}${TAB}{{.CPUPerc}}${TAB}{{.MemUsage}}${TAB}{{.MemPerc}}${TAB}{{.NetIO}}${TAB}{{.BlockIO}}${TAB}{{.PIDs}}" 2>/dev/null || true; printf "__CF_WEBSSH_IMAGES__%s\\n" "$(docker images -q 2>/dev/null | wc -l | tr -d " ")" 2>/dev/null || true; printf "${IMAGES_LIST_SECTION_PREFIX}\\n"; docker images --no-trunc --format "{{.ID}}${TAB}{{.Repository}}${TAB}{{.Tag}}${TAB}{{.Size}}${TAB}{{.CreatedAt}}" 2>/dev/null || true; sleep 5; done'`;
 
 /** 镜像数量行前缀。 */
 const IMAGES_PREFIX = '__CF_WEBSSH_IMAGES__';
@@ -121,21 +132,43 @@ function parseStatsRow(line: string): { id: string; entry: Partial<ContainerEntr
   };
 }
 
+function parseImageRow(line: string): ImageEntry | null {
+  const fields = line.split(TAB);
+  if (fields.length < 5) return null;
+  const [id, repository, tag, size, ...createdParts] = fields;
+  if (!id.trim()) return null;
+  return {
+    id: cleanField(id, 128),
+    repository: cleanField(repository, 256),
+    tag: cleanField(tag, 128),
+    size: cleanField(size, 64),
+    created: cleanField(createdParts.join(TAB), 128),
+  };
+}
+
 /** 把一个标记帧（marker 之后到下一个 marker 之前的文本）解析成快照。 */
 export function parseContainerFrame(frame: string, timestamp: number): ContainerSnapshot {
   const byId = new Map<string, ContainerEntry>();
+  const imageEntries: ImageEntry[] = [];
   let images: number | null = null;
   let inStats = false;
+  let inImagesList = false;
 
   for (const rawLine of frame.split(/\r?\n/)) {
     // 只去掉换行残留，不能 trim 整行：末尾的 TAB 是 ps 的空 Ports 字段，
     // trim 会把最后一个字段一起吃掉，导致该行被当作畸形行丢弃。
     const line = rawLine.replace(/\r$/, '');
     if (!line.trim()) continue;
-    if (line.trimStart().startsWith(STATS_SECTION_PREFIX)) { inStats = true; continue; }
+    if (line.trimStart().startsWith(STATS_SECTION_PREFIX)) { inStats = true; inImagesList = false; continue; }
+    if (line.trimStart().startsWith(IMAGES_LIST_SECTION_PREFIX)) { inImagesList = true; inStats = false; continue; }
     if (line.trimStart().startsWith(IMAGES_PREFIX)) {
       const value = Number.parseInt(line.trimStart().slice(IMAGES_PREFIX.length).trim(), 10);
       images = Number.isFinite(value) && value >= 0 ? value : null;
+      continue;
+    }
+    if (inImagesList) {
+      const parsedImage = parseImageRow(line);
+      if (parsedImage) imageEntries.push(parsedImage);
       continue;
     }
     if (inStats) {
@@ -151,7 +184,8 @@ export function parseContainerFrame(frame: string, timestamp: number): Container
 
   return {
     containers: [...byId.values()].slice(0, MAX_CONTAINERS),
-    images,
+    images: images ?? imageEntries.length,
+    imageEntries,
     timestamp,
   };
 }
@@ -164,10 +198,11 @@ export function retainContainerMarkerPrefix(buffer: string): string {
 export const CONTAINER_ACTION_OUTPUT_LIMIT = MAX_OUTPUT_BYTES;
 
 /**
- * 容器动作白名单。每个动作只接受"容器名 / 容器 ID"一个参数，
- * 且严格限定字符集，因此不存在命令注入面。
+ * 容器动作白名单。
+ * 新增 inspect（查看容器元数据/用于自动生成升级命令）、pull（拉取镜像）、
+ * prune_images（清理虚悬镜像）、upgrade（执行容器升级命令）。
  */
-const CONTAINER_ACTIONS = new Set(['start', 'stop', 'restart', 'rm', 'rmi', 'logs', 'pause', 'unpause']);
+const CONTAINER_ACTIONS = new Set(['start', 'stop', 'restart', 'rm', 'rmi', 'logs', 'pause', 'unpause', 'inspect', 'pull', 'prune_images', 'upgrade']);
 
 /**
  * 单个路径段的合法字符：Docker 自身规则是 [a-zA-Z0-9][a-zA-Z0-9_.-]。
@@ -186,6 +221,14 @@ export function buildContainerActionCommand(
   action: unknown, target: unknown, tail: unknown,
 ): string | null {
   if (typeof action !== 'string' || !CONTAINER_ACTIONS.has(action)) return null;
+  if (action === 'prune_images') {
+    return 'docker image prune -f';
+  }
+  if (action === 'upgrade') {
+    if (typeof target !== 'string' || target.length === 0 || target.length > 1024) return null;
+    if (!isValidUpgradeCommand(target)) return null;
+    return target;
+  }
   if (typeof target !== 'string' || target.length === 0 || target.length > 255) return null;
   if (!isValidDockerTarget(target)) return null;
   if (action === 'logs') {
@@ -196,7 +239,25 @@ export function buildContainerActionCommand(
   }
   if (tail !== undefined) return null;
   if (action === 'rmi') return `docker rmi ${target}`;
+  if (action === 'pull') return `docker pull ${target}`;
+  if (action === 'inspect') return `docker inspect ${target}`;
   return `docker ${action} ${target}`;
+}
+
+/**
+ * 校验升级命令是否安全合规：
+ * 允许包含合理的目录切换、git pull、docker compose / docker 命令，
+ * 严禁包含危险的破坏根目录命令或危险提权漏洞。
+ */
+function isValidUpgradeCommand(cmd: string): boolean {
+  const normalized = cmd.trim();
+  if (normalized.length === 0) return false;
+  // 禁止危险指令与字符
+  if (/rm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+\/($|\s)/.test(normalized)) return false;
+  if (/[:`$]\(|\b(mkfs|dd\s+if=|fdisk|chmod\s+-[a-zA-Z]*R\s+777\s+\/)\b/.test(normalized)) return false;
+  // 必须是与 docker 或 compose 或 git 升级相关的命令
+  if (!/(docker|compose|git\s+pull)\b/.test(normalized)) return false;
+  return true;
 }
 
 /**

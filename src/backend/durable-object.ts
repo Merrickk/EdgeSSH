@@ -11,7 +11,8 @@ interface MainAttachment { role: 'main'; phase: 'waiting' | 'connecting' | 'conn
 interface SFTPAttachment { role: 'sftp'; phase: 'connected' }
 interface ProcessAttachment { role: 'process'; phase: 'connected' }
 interface ContainerAttachment { role: 'container'; phase: 'connected' }
-type Attachment = MainAttachment | SFTPAttachment | ProcessAttachment | ContainerAttachment;
+interface CronAttachment { role: 'cron'; phase: 'connected' }
+type Attachment = MainAttachment | SFTPAttachment | ProcessAttachment | ContainerAttachment | CronAttachment;
 interface StoredTicket { secret: number[]; expiresAt: number; ip: string }
 interface PendingConnection {
   cancelled: boolean;
@@ -53,6 +54,11 @@ export class SSHSessionDO implements DurableObject {
   private readonly containerSessions = new Map<WebSocket, SSHSession>();
   private readonly containerOwners = new Map<WebSocket, WebSocket>();
   private readonly containerWebSocketsByMain = new Map<WebSocket, Set<WebSocket>>();
+  private readonly cronAttachTokens = new Map<string, AuxiliaryAttachToken>();
+  private readonly cronTokenByMainWebSocket = new Map<WebSocket, string>();
+  private readonly cronSessions = new Map<WebSocket, SSHSession>();
+  private readonly cronOwners = new Map<WebSocket, WebSocket>();
+  private readonly cronWebSocketsByMain = new Map<WebSocket, Set<WebSocket>>();
   private readonly retainedForwarding = new Map<WebSocket, RetainedForwarding>();
 
   constructor(state: DurableObjectState, env: Env) {
@@ -122,6 +128,7 @@ export class SSHSessionDO implements DurableObject {
     if (url.pathname === '/sftp') return this.attachSFTP(request);
     if (url.pathname === '/processes') return this.attachProcesses(request);
     if (url.pathname === '/containers') return this.attachContainers(request);
+    if (url.pathname === '/cron') return this.attachCron(request);
     if (url.pathname !== '/connect') return Response.json({ error: 'Not found' }, { status: 404 });
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return Response.json({ error: 'WebSocket upgrade required' }, { status: 426 });
     const sftpAttachToken = request.headers.get('x-sftp-attach-token');
@@ -130,12 +137,16 @@ export class SSHSessionDO implements DurableObject {
     const processAttachUrl = request.headers.get('x-process-attach-url');
     const containerAttachToken = request.headers.get('x-container-attach-token');
     const containerAttachUrl = request.headers.get('x-container-attach-url');
+    const cronAttachToken = request.headers.get('x-cron-attach-token');
+    const cronAttachUrl = request.headers.get('x-cron-attach-url');
     if (!sftpAttachToken || !SFTP_ATTACH_TOKEN_PATTERN.test(sftpAttachToken)
       || !sftpAttachUrl || !this.isValidAttachUrl(sftpAttachUrl, sftpAttachToken, '/api/sftp')
       || !processAttachToken || !SFTP_ATTACH_TOKEN_PATTERN.test(processAttachToken)
       || !processAttachUrl || !this.isValidAttachUrl(processAttachUrl, processAttachToken, '/api/processes')
       || !containerAttachToken || !SFTP_ATTACH_TOKEN_PATTERN.test(containerAttachToken)
-      || !containerAttachUrl || !this.isValidAttachUrl(containerAttachUrl, containerAttachToken, '/api/containers')) {
+      || !containerAttachUrl || !this.isValidAttachUrl(containerAttachUrl, containerAttachToken, '/api/containers')
+      || !cronAttachToken || !SFTP_ATTACH_TOKEN_PATTERN.test(cronAttachToken)
+      || !cronAttachUrl || !this.isValidAttachUrl(cronAttachUrl, cronAttachToken, '/api/cron')) {
       return Response.json({ error: 'Invalid attachment authorization' }, { status: 400 });
     }
     const ticket = request.headers.get('x-session-ticket');
@@ -151,12 +162,27 @@ export class SSHSessionDO implements DurableObject {
     this.registerSFTPAttachToken(sftpAttachToken, sftpAttachUrl, server);
     this.registerProcessAttachToken(processAttachToken, processAttachUrl, server);
     this.registerContainerAttachToken(containerAttachToken, containerAttachUrl, server);
+    this.registerCronAttachToken(cronAttachToken, cronAttachUrl, server);
     const deadline = setTimeout(() => this.reject(server, 'Connect message timeout'), 10_000);
     this.deadlines.set(server, deadline);
     return new Response(null, { status: 101, webSocket: client });
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    const cronSession = this.cronSessions.get(ws);
+    if (cronSession || this.isCronWebSocket(ws)) {
+      try {
+        if (!cronSession || ws.readyState !== WebSocket.OPEN) {
+          this.cleanupCronWebSocket(ws);
+          if (ws.readyState === WebSocket.OPEN) ws.close(1008, 'Cron monitor is unavailable');
+          return;
+        }
+        await cronSession.handleCronClientMessage(message);
+      } catch (error) {
+        try { ws.send(JSON.stringify({ type: 'cron_error', message: error instanceof Error ? error.message : String(error) })); } catch { /* already closed */ }
+      }
+      return;
+    }
     const containerSession = this.containerSessions.get(ws);
     if (containerSession || this.isContainerWebSocket(ws)) {
       try {
@@ -264,6 +290,12 @@ export class SSHSessionDO implements DurableObject {
         containerAttach.session = ssh;
         ssh.setContainerAttachUrl(containerAttach.attachUrl);
       }
+      const cronToken = this.cronTokenByMainWebSocket.get(ws);
+      const cronAttach = cronToken ? this.cronAttachTokens.get(cronToken) : undefined;
+      if (cronAttach) {
+        cronAttach.session = ssh;
+        ssh.setCronAttachUrl(cronAttach.attachUrl);
+      }
       this.sessions.set(ws, ssh);
       this.pendingConnections.delete(ws);
       pending.socket = undefined;
@@ -275,14 +307,16 @@ export class SSHSessionDO implements DurableObject {
   }
 
   async webSocketClose(ws: WebSocket): Promise<void> {
-    if (this.isContainerWebSocket(ws)) this.cleanupContainerWebSocket(ws);
+    if (this.isCronWebSocket(ws)) this.cleanupCronWebSocket(ws);
+    else if (this.isContainerWebSocket(ws)) this.cleanupContainerWebSocket(ws);
     else if (this.isProcessWebSocket(ws)) this.cleanupProcessWebSocket(ws);
     else if (this.isSFTPWebSocket(ws)) this.cleanupSFTPWebSocket(ws);
     else this.cleanup(ws);
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
-    if (this.isContainerWebSocket(ws)) this.cleanupContainerWebSocket(ws);
+    if (this.isCronWebSocket(ws)) this.cleanupCronWebSocket(ws);
+    else if (this.isContainerWebSocket(ws)) this.cleanupContainerWebSocket(ws);
     else if (this.isProcessWebSocket(ws)) this.cleanupProcessWebSocket(ws);
     else if (this.isSFTPWebSocket(ws)) this.cleanupSFTPWebSocket(ws);
     else this.cleanup(ws);
@@ -390,6 +424,75 @@ export class SSHSessionDO implements DurableObject {
     this.processWebSocketsByMain.set(attach.mainWebSocket, sockets);
     attach.session.attachProcessWebSocket(server);
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  private attachCron(request: Request): Response {
+    if (request.method !== 'GET') return Response.json({ error: 'Method not allowed' }, { status: 405 });
+    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+      return Response.json({ error: 'WebSocket upgrade required' }, { status: 426 });
+    }
+    const token = request.headers.get('x-cron-attach-token');
+    if (!token || !SFTP_ATTACH_TOKEN_PATTERN.test(token)) {
+      return Response.json({ error: 'Invalid cron attachment token' }, { status: 401 });
+    }
+    const attach = this.cronAttachTokens.get(token);
+    if (!attach || attach.mainWebSocket.readyState !== WebSocket.OPEN) {
+      if (attach) this.deleteCronAttachToken(token, attach);
+      return Response.json({ error: 'Invalid or expired cron attachment token' }, { status: 401 });
+    }
+    if (!attach.session) return Response.json({ error: 'SSH session is still initializing' }, { status: 409 });
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    this.state.acceptWebSocket(server);
+    server.serializeAttachment({ role: 'cron', phase: 'connected' } satisfies CronAttachment);
+    this.cronSessions.set(server, attach.session);
+    this.cronOwners.set(server, attach.mainWebSocket);
+    const sockets = this.cronWebSocketsByMain.get(attach.mainWebSocket) ?? new Set<WebSocket>();
+    sockets.add(server);
+    this.cronWebSocketsByMain.set(attach.mainWebSocket, sockets);
+    attach.session.attachCronWebSocket(server);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  private registerCronAttachToken(token: string, attachUrl: string, mainWebSocket: WebSocket): void {
+    const attach: AuxiliaryAttachToken = {
+      mainWebSocket,
+      attachUrl,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      timeout: null,
+    };
+    this.cronAttachTokens.set(token, attach);
+    this.cronTokenByMainWebSocket.set(mainWebSocket, token);
+  }
+
+  private deleteCronAttachToken(token: string, expected?: AuxiliaryAttachToken): void {
+    const attach = this.cronAttachTokens.get(token);
+    if (!attach || (expected && attach !== expected)) return;
+    if (attach.timeout !== null) clearTimeout(attach.timeout);
+    this.cronAttachTokens.delete(token);
+    if (this.cronTokenByMainWebSocket.get(attach.mainWebSocket) === token) {
+      this.cronTokenByMainWebSocket.delete(attach.mainWebSocket);
+    }
+  }
+
+  private cleanupCronWebSocket(ws: WebSocket): void {
+    const session = this.cronSessions.get(ws);
+    if (!session) return;
+    this.cronSessions.delete(ws);
+    try { session.detachCronWebSocket(ws); } catch { /* session is already closed */ }
+    const mainWebSocket = this.cronOwners.get(ws);
+    this.cronOwners.delete(ws);
+    if (!mainWebSocket) return;
+    const sockets = this.cronWebSocketsByMain.get(mainWebSocket);
+    sockets?.delete(ws);
+    if (sockets?.size === 0) this.cronWebSocketsByMain.delete(mainWebSocket);
+  }
+
+  private isCronWebSocket(ws: WebSocket): boolean {
+    if (this.cronSessions.has(ws)) return true;
+    const attachment = ws.deserializeAttachment() as Attachment | null;
+    return attachment?.role === 'cron';
   }
 
   private attachContainers(request: Request): Response {
@@ -515,7 +618,7 @@ export class SSHSessionDO implements DurableObject {
     }
   }
 
-  private isValidAttachUrl(value: string, token: string, pathname: '/api/sftp' | '/api/processes' | '/api/containers'): boolean {
+  private isValidAttachUrl(value: string, token: string, pathname: '/api/sftp' | '/api/processes' | '/api/containers' | '/api/cron'): boolean {
     if (value.length > 2048) return false;
     try {
       const url = new URL(value, 'https://session.invalid');
@@ -589,6 +692,8 @@ export class SSHSessionDO implements DurableObject {
     if (processToken) this.deleteProcessAttachToken(processToken);
     const containerToken = this.containerTokenByMainWebSocket.get(ws);
     if (containerToken) this.deleteContainerAttachToken(containerToken);
+    const cronToken = this.cronTokenByMainWebSocket.get(ws);
+    if (cronToken) this.deleteCronAttachToken(cronToken);
     const sftpWebSockets = this.sftpWebSocketsByMain.get(ws);
     if (sftpWebSockets) {
       for (const sftpWebSocket of [...sftpWebSockets]) {
@@ -612,6 +717,14 @@ export class SSHSessionDO implements DurableObject {
         try { containerWebSocket.close(1000, 'SSH session closed'); } catch { /* already closed */ }
       }
       this.containerWebSocketsByMain.delete(ws);
+    }
+    const cronWebSockets = this.cronWebSocketsByMain.get(ws);
+    if (cronWebSockets) {
+      for (const cronWebSocket of [...cronWebSockets]) {
+        this.cleanupCronWebSocket(cronWebSocket);
+        try { cronWebSocket.close(1000, 'SSH session closed'); } catch { /* already closed */ }
+      }
+      this.cronWebSocketsByMain.delete(ws);
     }
     const pending = this.pendingConnections.get(ws);
     if (pending) {

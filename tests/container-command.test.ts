@@ -46,6 +46,48 @@ test('未知状态归一化为 unknown，畸形行被丢弃', () => {
   assert.equal(snapshot.containers[0].state, 'unknown');
 });
 
+test('容器帧解析镜像列表段', () => {
+  const frame = [
+    'abc123def456\tweb-nginx\tnginx:1.25\trunning\tUp 3 hours\t2026-09-20 09:00\t0.0.0.0:80->80/tcp',
+    '__CF_WEBSSH_STATS__',
+    'abc123def456\t0.05%\t32MiB / 1GiB\t3.12%\t1.2kB / 3.4kB\t8MB / 12MB\t12',
+    '__CF_WEBSSH_IMAGES__2',
+    '__CF_WEBSSH_IMAGES_LIST__',
+    'img111222333\tnginx\t1.25\t142MB\t2 weeks ago',
+    'img444555666\tpostgres\t16-alpine\t379MB\t1 month ago',
+  ].join('\n');
+  const snapshot = parseContainerFrame(frame, 1_700_000_000_000);
+  assert.equal(snapshot.imageEntries.length, 2);
+  assert.equal(snapshot.imageEntries[0].id, 'img111222333');
+  assert.equal(snapshot.imageEntries[0].repository, 'nginx');
+  assert.equal(snapshot.imageEntries[0].tag, '1.25');
+  assert.equal(snapshot.imageEntries[0].size, '142MB');
+  assert.equal(snapshot.imageEntries[1].repository, 'postgres');
+  assert.equal(snapshot.imageEntries[1].tag, '16-alpine');
+});
+
+test('容器动作支持 inspect、pull、prune_images 和安全 upgrade', () => {
+  assert.equal(buildContainerActionCommand('inspect', 'web-nginx', undefined), 'docker inspect web-nginx');
+  assert.equal(buildContainerActionCommand('pull', 'nginx:alpine', undefined), 'docker pull nginx:alpine');
+  assert.equal(buildContainerActionCommand('pull', 'registry.example.com/app:v1', undefined), 'docker pull registry.example.com/app:v1');
+  assert.equal(buildContainerActionCommand('prune_images', 'all', undefined), 'docker image prune -f');
+
+  // upgrade 复合命令合规性
+  const composeUpgrade = 'cd /opt/app && docker compose pull && docker compose up -d';
+  assert.equal(buildContainerActionCommand('upgrade', composeUpgrade, undefined), composeUpgrade);
+
+  const gitUpgrade = 'cd /root/myproject && git pull && docker compose up -d --build';
+  assert.equal(buildContainerActionCommand('upgrade', gitUpgrade, undefined), gitUpgrade);
+
+  const singleUpgrade = 'docker pull redis:alpine && docker restart my-redis';
+  assert.equal(buildContainerActionCommand('upgrade', singleUpgrade, undefined), singleUpgrade);
+
+  // 危险命令被拒绝
+  assert.equal(buildContainerActionCommand('upgrade', 'rm -rf /', undefined), null);
+  assert.equal(buildContainerActionCommand('upgrade', 'cat /etc/passwd', undefined), null);
+  assert.equal(buildContainerActionCommand('upgrade', '', undefined), null);
+});
+
 test('容器动作命令白名单', () => {
   assert.equal(buildContainerActionCommand('stop', 'web-nginx', undefined), 'docker stop web-nginx');
   assert.equal(buildContainerActionCommand('restart', 'db-1', undefined), 'docker restart db-1');

@@ -23,6 +23,10 @@ export interface FileManagerElements {
   mkdir: HTMLButtonElement;
   rename: HTMLButtonElement;
   delete: HTMLButtonElement;
+  newFile?: HTMLButtonElement | null;
+  breadcrumbs?: HTMLElement | null;
+  pathToggle?: HTMLButtonElement | null;
+  toggleHidden?: HTMLButtonElement | null;
   uploadInput: HTMLInputElement;
   tableBody: HTMLTableSectionElement;
   loading: HTMLElement;
@@ -186,6 +190,10 @@ export function collectFileManagerElements(root: ParentNode = document): FileMan
     mkdir: requiredElement(root, 'file-mkdir'),
     rename: requiredElement(root, 'file-rename'),
     delete: requiredElement(root, 'file-delete'),
+    newFile: root.querySelector<HTMLButtonElement>('#file-new-file'),
+    breadcrumbs: root.querySelector<HTMLElement>('#file-breadcrumbs'),
+    pathToggle: root.querySelector<HTMLButtonElement>('#file-path-edit-toggle'),
+    toggleHidden: root.querySelector<HTMLButtonElement>('#file-toggle-hidden'),
     uploadInput: requiredElement(root, 'file-upload-input'),
     tableBody: requiredElement(root, 'file-table-body'),
     loading: requiredElement(root, 'file-manager-loading'),
@@ -337,6 +345,7 @@ export class FileManager {
   private sortKey: FileSortKey = 'name';
   private sortAscending = true;
   private filterText = '';
+  private showHiddenFiles = true;
   /** Files waiting for the single SFTP upload slot. */
   private uploadQueue: File[] = [];
   private queuePumping = false;
@@ -603,9 +612,12 @@ export class FileManager {
   /** Apply the filter and sort to the cached listing and repaint both views. */
   private applyView(): void {
     const query = this.filterText.trim().toLocaleLowerCase();
-    const filtered = query
+    let filtered = query
       ? this.sourceEntries.filter((entry) => entry.name.toLocaleLowerCase().includes(query))
       : this.sourceEntries;
+    if (!this.showHiddenFiles) {
+      filtered = filtered.filter((entry) => !entry.name.startsWith('.'));
+    }
     const direction = this.sortAscending ? 1 : -1;
     const key = this.sortKey;
     const collation = this.isChinese() ? 'zh-CN' : 'en';
@@ -938,15 +950,23 @@ export class FileManager {
     this.openEditor(normalized, name);
   }
 
-  private openEditor(path: string, name: string): void {
+  private openEditor(path: string, name: string, isNew = false): void {
     const dialog = this.elements.editorDialog;
     const area = this.elements.editorArea;
     if (!dialog || !area) return;
-    this.editorState = { path, name, dirty: false, saving: false };
+    this.editorState = { path, name, dirty: isNew, saving: false };
     this.editorText = '';
     if (this.elements.editorTitle) this.elements.editorTitle.textContent = name;
     if (this.elements.editorPath) this.elements.editorPath.textContent = path;
     area.value = '';
+    if (isNew) {
+      area.readOnly = false;
+      this.setEditorStatus({ zh: '新文件，输入内容后保存', en: 'New file; enter content and save' });
+      this.updateEditorControls();
+      if (!dialog.open) dialog.showModal();
+      area.focus();
+      return;
+    }
     area.readOnly = true;
     this.setEditorStatus({ zh: '正在读取文件…', en: 'Loading file…' });
     this.updateEditorControls();
@@ -1161,11 +1181,17 @@ export class FileManager {
       event.preventDefault();
       this.navigate(this.elements.path.value);
     }, { signal });
+    this.elements.path.addEventListener('focus', () => {
+      this.togglePathInputMode(true);
+    }, { signal });
     this.elements.back.addEventListener('click', () => this.back(), { signal });
     this.elements.up.addEventListener('click', () => this.up(), { signal });
     this.elements.home.addEventListener('click', () => this.home(), { signal });
     this.elements.refresh.addEventListener('click', () => this.refresh(), { signal });
     this.elements.upload.addEventListener('click', () => this.elements.uploadInput.click(), { signal });
+    this.elements.newFile?.addEventListener('click', () => void this.createFile(), { signal });
+    this.elements.pathToggle?.addEventListener('click', () => this.togglePathInputMode(), { signal });
+    this.elements.toggleHidden?.addEventListener('click', () => this.toggleHiddenFiles(), { signal });
     this.elements.uploadInput.addEventListener('change', () => {
       const files = Array.from(this.elements.uploadInput.files ?? []);
       this.elements.uploadInput.value = '';
@@ -1467,6 +1493,7 @@ export class FileManager {
     this.history = [cwd];
     this.historyIndex = 0;
     this.elements.path.value = cwd;
+    this.updateBreadcrumbs(cwd);
     this.updateControls();
     this.requestList(cwd, 'none');
   }
@@ -1529,6 +1556,8 @@ export class FileManager {
     this.selectedIndex = -1;
     this.closeActionSheet(false);
     this.elements.path.value = path;
+    this.updateBreadcrumbs(path);
+    this.togglePathInputMode(false);
     this.elements.loading.hidden = true;
     this.elements.error.hidden = true;
     this.applyView();
@@ -1671,6 +1700,98 @@ export class FileManager {
     } else {
       this.downloadSelected();
     }
+  }
+
+  private toggleHiddenFiles(): void {
+    this.showHiddenFiles = !this.showHiddenFiles;
+    if (this.elements.toggleHidden) {
+      this.elements.toggleHidden.setAttribute('aria-pressed', String(this.showHiddenFiles));
+      this.elements.toggleHidden.title = this.showHiddenFiles ? '隐藏以点开头的文件' : '显示以点开头的文件';
+    }
+    this.applyView();
+  }
+
+  /**
+   * 1Panel 风格路径面包屑导航：将绝对路径分解为每一级路径段按钮，
+   * 用户可直接点击任意一段跳回对应上级目录；右侧提供 ✎ 按钮一键切回原生路径输入框。
+   */
+  private updateBreadcrumbs(currentPath = this.cwd): void {
+    const container = this.elements.breadcrumbs;
+    if (!container) return;
+    container.replaceChildren();
+
+    const segments: Array<{ name: string; path: string }> = [{ name: '根目录 /', path: '/' }];
+    const parts = currentPath.split('/').filter(Boolean);
+    let accum = '';
+    for (const part of parts) {
+      accum += `/${part}`;
+      segments.push({ name: part, path: accum });
+    }
+
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      if (i > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'file-breadcrumb-sep';
+        sep.textContent = '>';
+        container.append(sep);
+      }
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'file-breadcrumb-btn';
+      btn.textContent = seg.name;
+      btn.title = seg.path;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (seg.path !== this.cwd) this.navigate(seg.path);
+      });
+      container.append(btn);
+    }
+  }
+
+  private togglePathInputMode(manualInput?: boolean): void {
+    const container = this.elements.path.closest('.file-path-container') as HTMLElement | null;
+    const breadcrumbs = this.elements.breadcrumbs;
+    if (!container || !breadcrumbs) return;
+
+    const toInput = manualInput !== undefined ? manualInput : !container.classList.contains('is-manual');
+    container.classList.toggle('is-manual', toInput);
+    breadcrumbs.hidden = toInput;
+    if (this.elements.pathToggle) {
+      this.elements.pathToggle.textContent = toInput ? '✓' : '✎';
+      this.elements.pathToggle.title = toInput ? '确认并返回面包屑' : '手动输入绝对路径';
+    }
+    if (toInput) {
+      this.elements.path.focus();
+      this.elements.path.select();
+    }
+  }
+
+  /**
+   * 1Panel 风格新建文件：
+   * 弹出输入框输入新文件名，确认后立即使用内置在线文本编辑器打开，
+   * 用户可以在线编写代码内容并一键保存到服务器！
+   */
+  private async createFile(): Promise<void> {
+    if (!this.ready || this.hasTransfer()) return;
+    const input = await this.promptAction(this.localize({
+      zh: '新文件名称（如 app.py、docker-compose.yml、config.json）',
+      en: 'New file name (e.g. app.py, docker-compose.yml, config.json)',
+    }), '');
+    if (input === null || !input.trim()) return;
+    const filename = input.trim();
+    let path: string;
+    try { path = joinPath(this.cwd, filename); } catch {
+      this.showError(this.localize({ zh: '文件名无效。', en: 'The file name is invalid.' }));
+      return;
+    }
+    const existing = this.sourceEntries.find((e) => e.name === filename);
+    if (existing) {
+      this.showError(this.localize({ zh: `“${filename}”已存在。`, en: `“${filename}” already exists.` }));
+      return;
+    }
+    // 打开文本编辑器创建新文件，不必发起远程下载
+    this.openEditor(path, filename, true);
   }
 
   private async createDirectory(): Promise<void> {
@@ -2065,6 +2186,7 @@ export class FileManager {
     this.elements.refresh.disabled = !this.ready;
     this.elements.upload.disabled = !idle;
     this.elements.mkdir.disabled = !idle;
+    if (this.elements.newFile) this.elements.newFile.disabled = !idle;
     this.elements.download.disabled = !idle || !selected || selected.type !== 'file' || sizeExceedsLimit(selected.size);
     this.elements.rename.disabled = !idle || !selected;
     this.elements.delete.disabled = !idle || !selected;
@@ -2084,6 +2206,7 @@ export class FileManager {
     this.elements.empty.hidden = true;
     this.elements.error.hidden = true;
     this.elements.path.value = '/';
+    this.updateBreadcrumbs('/');
     this.hideProgress();
     if (channelLost) this.setStatus(detail ?? DISCONNECTED_CHANNEL);
     else this.updateStatusText(DISCONNECTED);

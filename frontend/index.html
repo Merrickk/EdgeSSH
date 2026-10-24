@@ -421,10 +421,14 @@
                   <div class="file-tree-resize" aria-hidden="true"></div>
                 </aside>
                 <div class="file-toolbar">
-                  <label class="file-path-field" for="file-manager-path">
-                    <span class="sr-only" data-i18n-zh="当前路径" data-i18n-en="Current path">当前路径</span>
-                    <input id="file-manager-path" type="text" value="/" autocomplete="off" spellcheck="false" aria-label="当前路径" data-i18n-aria-label-zh="当前路径" data-i18n-aria-label-en="Current path" />
-                  </label>
+                  <div class="file-path-container">
+                    <nav id="file-breadcrumbs" class="file-breadcrumbs" aria-label="路径导航"></nav>
+                    <label class="file-path-field" for="file-manager-path">
+                      <span class="sr-only" data-i18n-zh="当前路径" data-i18n-en="Current path">当前路径</span>
+                      <input id="file-manager-path" type="text" value="/" autocomplete="off" spellcheck="false" aria-label="当前路径" data-i18n-aria-label-zh="当前路径" data-i18n-aria-label-en="Current path" />
+                    </label>
+                    <button id="file-path-edit-toggle" class="file-path-toggle icon-button" type="button" aria-label="编辑路径" title="手动输入路径">✎</button>
+                  </div>
                   <div class="file-actions" aria-label="文件操作" data-i18n-aria-label-zh="文件操作" data-i18n-aria-label-en="File actions">
                     <button
                       id="file-tree-toggle"
@@ -446,12 +450,14 @@
                     <span class="file-action-separator" aria-hidden="true"></span>
                     <button id="file-upload" class="file-action file-action-wide" type="button" disabled data-i18n-zh="上传" data-i18n-en="Upload">上传</button>
                     <button id="file-download" class="file-action file-action-wide" type="button" disabled data-i18n-zh="下载" data-i18n-en="Download">下载</button>
+                    <button id="file-new-file" class="file-action file-action-wide" type="button" disabled data-i18n-zh="新建文件" data-i18n-en="New file">新建文件</button>
                     <button id="file-mkdir" class="file-action file-action-wide" type="button" disabled data-i18n-zh="新建文件夹" data-i18n-en="New folder">新建文件夹</button>
                     <button id="file-rename" class="file-action file-action-wide" type="button" disabled data-i18n-zh="重命名" data-i18n-en="Rename">重命名</button>
                     <button id="file-delete" class="file-action file-action-wide danger" type="button" disabled data-i18n-zh="删除" data-i18n-en="Delete">删除</button>
                     <input id="file-upload-input" class="sr-only" type="file" multiple tabindex="-1" />
                   </div>
                   <div class="file-view-controls">
+                    <button id="file-toggle-hidden" class="file-action" type="button" aria-pressed="true" aria-label="显示/隐藏点开头文件" title="隐藏文件切换">.*</button>
                     <button
                       id="file-filter-toggle"
                       class="file-action"
@@ -629,46 +635,143 @@
                 </div>
               </section>
               <section id="container-manager-panel" class="container-manager" role="tabpanel" aria-labelledby="container-manager-tab" tabindex="0" hidden>
-                <div class="container-summary" aria-label="容器概览" data-i18n-aria-label-zh="容器概览" data-i18n-aria-label-en="Container overview">
-                  <div class="container-summary-item is-running">
-                    <span data-i18n-zh="运行中" data-i18n-en="Running">运行中</span>
-                    <strong id="container-running-count">0</strong>
+                <div class="container-nav-tabs" role="tablist" aria-label="容器与镜像管理">
+                  <button id="container-subtab-containers" class="container-subtab is-active" type="button" role="tab" aria-selected="true" data-i18n-zh="容器列表" data-i18n-en="Containers">容器列表</button>
+                  <button id="container-subtab-images" class="container-subtab" type="button" role="tab" aria-selected="false" data-i18n-zh="镜像管理" data-i18n-en="Images">镜像管理</button>
+                </div>
+
+                <!-- 容器管理视图 -->
+                <div id="container-view-containers" class="container-view-block">
+                  <div class="container-summary" aria-label="容器概览" data-i18n-aria-label-zh="容器概览" data-i18n-aria-label-en="Container overview">
+                    <div class="container-summary-item is-running">
+                      <span data-i18n-zh="运行中" data-i18n-en="Running">运行中</span>
+                      <strong id="container-running-count">0</strong>
+                    </div>
+                    <div class="container-summary-item">
+                      <span data-i18n-zh="容器总数" data-i18n-en="Containers">容器总数</span>
+                      <strong id="container-total-count">0</strong>
+                    </div>
+                    <div class="container-summary-item">
+                      <span data-i18n-zh="镜像" data-i18n-en="Images">镜像</span>
+                      <strong id="container-image-count">—</strong>
+                    </div>
+                    <div class="container-summary-item">
+                      <span data-i18n-zh="更新时间" data-i18n-en="Updated">更新时间</span>
+                      <strong id="container-updated">--</strong>
+                    </div>
                   </div>
-                  <div class="container-summary-item">
-                    <span data-i18n-zh="容器总数" data-i18n-en="Containers">容器总数</span>
-                    <strong id="container-total-count">0</strong>
-                  </div>
-                  <div class="container-summary-item">
-                    <span data-i18n-zh="镜像" data-i18n-en="Images">镜像</span>
-                    <strong id="container-image-count">—</strong>
-                  </div>
-                  <div class="container-summary-item">
-                    <span data-i18n-zh="更新时间" data-i18n-en="Updated">更新时间</span>
-                    <strong id="container-updated">--</strong>
+                  <div class="container-table-wrap">
+                    <table class="container-table" aria-describedby="container-manager-status">
+                      <thead>
+                        <tr>
+                          <th scope="col" data-i18n-zh="名称" data-i18n-en="Name">名称</th>
+                          <th scope="col" data-i18n-zh="镜像" data-i18n-en="Image">镜像</th>
+                          <th scope="col" data-i18n-zh="状态" data-i18n-en="State">状态</th>
+                          <th scope="col" data-i18n-zh="状态描述" data-i18n-en="Status">状态描述</th>
+                          <th scope="col" data-i18n-zh="端口" data-i18n-en="Ports">端口</th>
+                          <th scope="col" data-i18n-zh="CPU" data-i18n-en="CPU">CPU</th>
+                          <th scope="col" data-i18n-zh="内存" data-i18n-en="Memory">内存</th>
+                          <th scope="col" data-i18n-zh="操作" data-i18n-en="Actions">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody id="container-table-body"></tbody>
+                    </table>
+                    <div id="container-manager-empty" class="container-manager-state" hidden data-i18n-zh="该主机上没有容器" data-i18n-en="No containers on this host">该主机上没有容器</div>
+                    <div id="container-manager-error" class="container-manager-state error" role="alert" hidden></div>
                   </div>
                 </div>
-                <div class="container-table-wrap">
-                  <table class="container-table" aria-describedby="container-manager-status">
-                    <thead>
-                      <tr>
-                        <th scope="col" data-i18n-zh="名称" data-i18n-en="Name">名称</th>
-                        <th scope="col" data-i18n-zh="镜像" data-i18n-en="Image">镜像</th>
-                        <th scope="col" data-i18n-zh="状态" data-i18n-en="State">状态</th>
-                        <th scope="col" data-i18n-zh="状态描述" data-i18n-en="Status">状态描述</th>
-                        <th scope="col" data-i18n-zh="端口" data-i18n-en="Ports">端口</th>
-                        <th scope="col" data-i18n-zh="CPU" data-i18n-en="CPU">CPU</th>
-                        <th scope="col" data-i18n-zh="内存" data-i18n-en="Memory">内存</th>
-                        <th scope="col" data-i18n-zh="操作" data-i18n-en="Actions">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody id="container-table-body"></tbody>
-                  </table>
-                  <div id="container-manager-empty" class="container-manager-state" hidden data-i18n-zh="该主机上没有容器" data-i18n-en="No containers on this host">该主机上没有容器</div>
-                  <div id="container-manager-error" class="container-manager-state error" role="alert" hidden></div>
+
+                <!-- 镜像管理视图 (参考 1Panel) -->
+                <div id="container-view-images" class="container-view-block" hidden>
+                  <div class="container-summary" aria-label="镜像概览">
+                    <div class="container-summary-item">
+                      <span data-i18n-zh="镜像总数" data-i18n-en="Total images">镜像总数</span>
+                      <strong id="image-summary-total">0</strong>
+                    </div>
+                    <div class="container-summary-item">
+                      <span data-i18n-zh="磁盘占用" data-i18n-en="Total size">磁盘占用</span>
+                      <strong id="image-summary-size">0 B</strong>
+                    </div>
+                    <div class="container-summary-item">
+                      <span data-i18n-zh="悬虚镜像" data-i18n-en="Dangling">悬虚镜像</span>
+                      <strong id="image-summary-dangling">0</strong>
+                    </div>
+                  </div>
+                  <div class="image-toolbar">
+                    <div class="image-toolbar-actions">
+                      <button id="image-btn-pull" class="home-button primary" type="button" data-i18n-zh="拉取镜像" data-i18n-en="Pull image">拉取镜像</button>
+                      <button id="image-btn-prune" class="home-button" type="button" data-i18n-zh="清理未用镜像" data-i18n-en="Prune unused">清理未用镜像</button>
+                    </div>
+                    <label class="image-search-field">
+                      <input id="image-search-input" type="search" placeholder="搜索镜像或标签…" data-i18n-placeholder-zh="搜索镜像或标签…" data-i18n-placeholder-en="Search image or tag…" autocomplete="off" spellcheck="false" />
+                    </label>
+                  </div>
+                  <div class="container-table-wrap">
+                    <table class="container-table image-table">
+                      <thead>
+                        <tr>
+                          <th scope="col" data-i18n-zh="镜像名" data-i18n-en="Repository">镜像名</th>
+                          <th scope="col" data-i18n-zh="标签" data-i18n-en="Tag">标签</th>
+                          <th scope="col" data-i18n-zh="镜像 ID" data-i18n-en="Image ID">镜像 ID</th>
+                          <th scope="col" data-i18n-zh="大小" data-i18n-en="Size">大小</th>
+                          <th scope="col" data-i18n-zh="创建时间" data-i18n-en="Created">创建时间</th>
+                          <th scope="col" data-i18n-zh="操作" data-i18n-en="Actions">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody id="container-image-table-body"></tbody>
+                    </table>
+                    <div id="container-image-empty" class="container-manager-state" hidden data-i18n-zh="该主机上没有镜像" data-i18n-en="No images on this host">该主机上没有镜像</div>
+                  </div>
                 </div>
+
                 <div class="container-statusbar">
                   <span id="container-manager-status" role="status" aria-live="polite" data-i18n-zh="连接 SSH 后即可管理容器" data-i18n-en="Connect to SSH to manage containers">连接 SSH 后即可管理容器</span>
                   <span class="container-statusbar-hint" data-i18n-zh="docker 命令按 5 秒周期采样" data-i18n-en="docker commands are sampled every 5s">docker 命令按 5 秒周期采样</span>
+                </div>
+              </section>
+
+              <!-- 计划任务面板 (Cron) -->
+              <section id="cron-manager-panel" class="cron-manager" role="tabpanel" tabindex="0" hidden>
+                <div class="cron-summary" aria-label="计划任务概览">
+                  <div class="cron-summary-item is-active">
+                    <span data-i18n-zh="运行中任务" data-i18n-en="Active">运行中任务</span>
+                    <strong id="cron-enabled-count">0</strong>
+                  </div>
+                  <div class="cron-summary-item is-paused">
+                    <span data-i18n-zh="已停用任务" data-i18n-en="Disabled">已停用任务</span>
+                    <strong id="cron-disabled-count">0</strong>
+                  </div>
+                  <div class="cron-summary-item">
+                    <span data-i18n-zh="任务总数" data-i18n-en="Total tasks">任务总数</span>
+                    <strong id="cron-total-count">0</strong>
+                  </div>
+                </div>
+                <div class="cron-toolbar">
+                  <div class="cron-toolbar-actions">
+                    <button id="cron-btn-new" class="cron-btn-primary" type="button" data-i18n-zh="＋ 新建计划任务" data-i18n-en="＋ New task">＋ 新建计划任务</button>
+                    <button id="cron-btn-refresh" class="cron-btn-secondary" type="button" data-i18n-zh="刷新" data-i18n-en="Refresh">刷新</button>
+                  </div>
+                </div>
+                <div class="cron-table-wrap">
+                  <table class="cron-table" aria-describedby="cron-manager-status">
+                    <thead>
+                      <tr>
+                        <th scope="col" data-i18n-zh="任务名称" data-i18n-en="Name">任务名称</th>
+                        <th scope="col" data-i18n-zh="执行周期" data-i18n-en="Schedule">执行周期</th>
+                        <th scope="col" data-i18n-zh="任务类型" data-i18n-en="Type">任务类型</th>
+                        <th scope="col" data-i18n-zh="执行命令 / 脚本路径" data-i18n-en="Command">执行命令 / 脚本路径</th>
+                        <th scope="col" data-i18n-zh="状态" data-i18n-en="Status">状态</th>
+                        <th scope="col" data-i18n-zh="操作" data-i18n-en="Actions">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody id="cron-table-body"></tbody>
+                  </table>
+                  <div id="cron-manager-empty" class="cron-manager-state" hidden data-i18n-zh="暂无计划任务" data-i18n-en="No cron tasks yet">暂无计划任务</div>
+                  <div id="cron-manager-error" class="cron-manager-state error" role="alert" hidden></div>
+                </div>
+                <div class="cron-statusbar">
+                  <span id="cron-manager-status" role="status" aria-live="polite" data-i18n-zh="连接 SSH 后即可管理计划任务" data-i18n-en="Connect to SSH to manage cron tasks">连接 SSH 后即可管理计划任务</span>
+                  <span data-i18n-zh="通过系统 crontab 调度管理" data-i18n-en="Managed via system crontab">通过系统 crontab 调度管理</span>
                 </div>
               </section>
               <section id="event-log-container" class="event-log-container" role="tabpanel" aria-labelledby="event-toggle" tabindex="0" hidden>
@@ -774,6 +877,190 @@
           <div class="dialog-actions">
             <button id="container-confirm-reject" class="secondary-button" value="reject" type="submit" data-i18n-zh="取消" data-i18n-en="Cancel">取消</button>
             <button id="container-confirm-accept" class="primary-button is-danger" value="confirm" type="submit" data-i18n-zh="确定删除" data-i18n-en="Remove">确定删除</button>
+          </div>
+        </form>
+      </dialog>
+
+      <!-- 容器升级弹窗 -->
+      <dialog id="container-upgrade-dialog" class="file-dialog container-upgrade-dialog" aria-labelledby="container-upgrade-title">
+        <header class="file-dialog-header">
+          <div>
+            <p class="eyebrow">UPGRADE</p>
+            <h2 id="container-upgrade-title">容器升级</h2>
+          </div>
+          <button id="container-upgrade-close" class="file-dialog-close" type="button" aria-label="关闭">✕</button>
+        </header>
+        <div class="container-upgrade-body">
+          <div class="container-upgrade-meta">
+            <div class="container-upgrade-meta-item">
+              <span>目标容器</span>
+              <strong id="container-upgrade-name">--</strong>
+            </div>
+            <div class="container-upgrade-meta-item">
+              <span>当前镜像</span>
+              <code id="container-upgrade-image">--</code>
+            </div>
+            <div class="container-upgrade-meta-item">
+              <span>检测类型</span>
+              <span id="container-upgrade-type-badge" class="container-type-badge">分析中…</span>
+            </div>
+          </div>
+
+          <div class="container-upgrade-modes" role="radiogroup" aria-label="升级模式选择">
+            <label class="container-upgrade-mode-label">
+              <input type="radio" name="containerUpgradeMode" value="auto" checked />
+              <span>智能推荐模式</span>
+            </label>
+            <label class="container-upgrade-mode-label">
+              <input type="radio" name="containerUpgradeMode" value="compose_git" />
+              <span>Git 源码拉取 (git pull & build)</span>
+            </label>
+            <label class="container-upgrade-mode-label">
+              <input type="radio" name="containerUpgradeMode" value="compose_pull" />
+              <span>Compose 镜像更新 (compose pull)</span>
+            </label>
+            <label class="container-upgrade-mode-label">
+              <input type="radio" name="containerUpgradeMode" value="image_pull" />
+              <span>单镜像更新 (docker pull)</span>
+            </label>
+          </div>
+
+          <label class="container-upgrade-cmd-label" for="container-upgrade-command">
+            <span>即将执行的升级命令 (可手动编辑调整):</span>
+            <textarea id="container-upgrade-command" rows="3" spellcheck="false"></textarea>
+          </label>
+
+          <p id="container-upgrade-hint" class="container-upgrade-hint"></p>
+        </div>
+        <footer class="file-dialog-actions">
+          <button id="container-upgrade-add-cron" class="secondary-button" type="button">＋ 一键添加到计划任务</button>
+          <button id="container-upgrade-dismiss" class="secondary-button" type="button">取消</button>
+          <button id="container-upgrade-exec" class="primary-button" type="button">立即执行升级</button>
+        </footer>
+      </dialog>
+
+      <!-- 镜像拉取弹窗 (参考 1Panel) -->
+      <dialog id="container-pull-dialog" class="file-dialog container-pull-dialog" aria-labelledby="container-pull-title">
+        <header class="file-dialog-header">
+          <div>
+            <p class="eyebrow">IMAGE</p>
+            <h2 id="container-pull-title">拉取镜像</h2>
+          </div>
+          <button id="container-pull-close" class="file-dialog-close" type="button" aria-label="关闭">✕</button>
+        </header>
+        <div class="container-pull-body">
+          <label class="container-pull-field" for="container-pull-input">
+            <span>镜像名称 (如 nginx:alpine、postgres:16、redis:7)</span>
+            <input id="container-pull-input" type="text" placeholder="例如：nginx:latest" autocomplete="off" spellcheck="false" />
+          </label>
+          <p class="container-pull-help">将调用远程主机的 docker pull 命令拉取镜像，拉取成功后自动刷新镜像列表。</p>
+        </div>
+        <footer class="file-dialog-actions">
+          <button id="container-pull-dismiss" class="secondary-button" type="button">取消</button>
+          <button id="container-pull-confirm" class="primary-button" type="button">确定拉取</button>
+        </footer>
+      </dialog>
+
+      <!-- 计划任务：新建 / 编辑弹窗 (参考 1Panel) -->
+      <dialog id="cron-task-dialog" class="file-dialog cron-task-dialog" aria-labelledby="cron-task-title">
+        <header class="file-dialog-header">
+          <div>
+            <p class="eyebrow">CRON</p>
+            <h2 id="cron-task-title">新建计划任务</h2>
+          </div>
+          <button id="cron-dialog-close" class="file-dialog-close" type="button" aria-label="关闭">✕</button>
+        </header>
+        <div class="cron-form-grid">
+          <label class="wide">
+            <span>任务名称 *</span>
+            <input id="cron-task-name" type="text" placeholder="例如：每日数据备份、容器定时升级" required />
+          </label>
+
+          <label class="wide">
+            <span>执行周期 (Cron 表达式) *</span>
+            <div class="cron-schedule-row">
+              <select id="cron-preset-select">
+                <option value="0 3 * * *">每天凌晨 03:00</option>
+                <option value="0 4 * * *">每天凌晨 04:00</option>
+                <option value="0 3 * * 0">每周日凌晨 03:00</option>
+                <option value="0 * * * *">每小时整点</option>
+                <option value="*/15 * * * *">每隔 15 分钟</option>
+                <option value="*/30 * * * *">每隔 30 分钟</option>
+                <option value="0 2 1 * *">每月 1 号 02:00</option>
+                <option value="@reboot">开机自启 (@reboot)</option>
+              </select>
+              <input id="cron-task-schedule" type="text" value="0 3 * * *" placeholder="分 时 日 月 周，如 0 3 * * *" />
+            </div>
+            <span id="cron-schedule-hint" class="cron-schedule-hint">每天 03:00 执行</span>
+          </label>
+
+          <label class="wide">
+            <span>任务类型</span>
+            <div class="cron-type-toggle">
+              <label>
+                <input id="cron-type-command" type="radio" name="cronTaskType" value="command" checked />
+                <span>Shell 命令</span>
+              </label>
+              <label>
+                <input id="cron-type-script" type="radio" name="cronTaskType" value="script" />
+                <span>脚本文件 (在线编辑并保存到服务器)</span>
+              </label>
+            </div>
+          </label>
+
+          <div id="cron-command-group" class="wide">
+            <label>
+              <span>执行命令 *</span>
+              <textarea id="cron-command-input" rows="3" placeholder="例如：cd /opt/myapp && docker compose pull && docker compose up -d" spellcheck="false"></textarea>
+            </label>
+          </div>
+
+          <div id="cron-script-group" class="wide" hidden>
+            <label>
+              <span>服务器脚本文件保存路径 *</span>
+              <input id="cron-script-path" type="text" value="/root/scripts/task.sh" placeholder="/root/scripts/task.sh" spellcheck="false" />
+            </label>
+            <div class="cron-script-editor">
+              <span>在线编辑脚本代码 (自动赋权 chmod +x):</span>
+              <textarea id="cron-script-area" rows="8" spellcheck="false"></textarea>
+            </div>
+          </div>
+        </div>
+        <footer class="file-dialog-actions">
+          <button id="cron-dialog-cancel" class="secondary-button" type="button">取消</button>
+          <button id="cron-dialog-save" class="primary-button" type="button">保存任务</button>
+        </footer>
+      </dialog>
+
+      <!-- 计划任务：运行结果输出弹窗 -->
+      <dialog id="cron-run-dialog" class="file-dialog cron-run-dialog" aria-labelledby="cron-run-title">
+        <header class="file-dialog-header">
+          <div>
+            <p class="eyebrow">RESULT</p>
+            <h2 id="cron-run-title">执行结果</h2>
+          </div>
+          <button id="cron-run-close" class="file-dialog-close" type="button" aria-label="关闭">✕</button>
+        </header>
+        <div class="cron-run-body">
+          <pre id="cron-run-text"></pre>
+        </div>
+        <footer class="file-dialog-actions">
+          <button id="cron-run-dismiss" class="primary-button" type="button">确定</button>
+        </footer>
+      </dialog>
+
+      <!-- 计划任务：删除确认弹窗 -->
+      <dialog id="cron-confirm-dialog" class="host-key-dialog" aria-labelledby="cron-confirm-title">
+        <form method="dialog">
+          <span class="dialog-icon" aria-hidden="true">!</span>
+          <div>
+            <p class="eyebrow" data-i18n-zh="危险操作" data-i18n-en="Destructive action">危险操作</p>
+            <h2 id="cron-confirm-title">删除计划任务</h2>
+            <p id="cron-confirm-description"></p>
+          </div>
+          <div class="dialog-actions">
+            <button id="cron-confirm-reject" class="secondary-button" value="reject" type="submit">取消</button>
+            <button id="cron-confirm-accept" class="primary-button is-danger" value="confirm" type="submit">确定删除</button>
           </div>
         </form>
       </dialog>

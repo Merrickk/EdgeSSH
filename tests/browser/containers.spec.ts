@@ -21,18 +21,97 @@ test('容器页入口、连接与列表渲染', async ({ page }, testInfo) => {
   // 计数与列表都由快照驱动。
   await expect(page.locator('#container-running-count')).toHaveText('1');
   await expect(page.locator('#container-total-count')).toHaveText('2');
-  await expect(page.locator('#container-image-count')).toHaveText('7');
+  await expect(page.locator('#container-image-count')).toHaveText('2');
   const rows = page.locator('#container-table-body tr');
   await expect(rows).toHaveCount(2);
   await expect(rows.filter({ hasText: 'web-nginx' })).toContainText('nginx:1.25');
   await expect(rows.filter({ hasText: 'web-nginx' })).toContainText('0.05%');
   await expect(rows.filter({ hasText: 'web-nginx' })).toContainText('3.12%');
   await expect(rows.filter({ hasText: 'db-postgres' })).toContainText('已退出');
-  // 运行中的容器显示停止/重启，已退出的显示启动。
+  // 运行中的容器显示停止/重启/升级，已退出的显示启动/升级。
   await expect(rows.filter({ hasText: 'web-nginx' }).locator('[data-container-action="stop"]')).toBeVisible();
+  await expect(rows.filter({ hasText: 'web-nginx' }).locator('[data-container-action="upgrade"]')).toBeVisible();
   await expect(rows.filter({ hasText: 'db-postgres' }).locator('[data-container-action="start"]')).toBeVisible();
   await expect(fixture.containerSockets).toHaveLength(1);
   await page.screenshot({ path: testInfo.outputPath('containers-list.png'), fullPage: true });
+});
+
+test('容器升级智能识别类型并支持一键添加到计划任务', async ({ page }) => {
+  const fixture = await fileFixture(page);
+  await openContainers(page);
+
+  const row = page.locator('#container-table-body tr').filter({ hasText: 'web-nginx' });
+  await row.locator('[data-container-action="upgrade"]').click();
+
+  const dialog = page.locator('#container-upgrade-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(page.locator('#container-upgrade-name')).toHaveText('web-nginx');
+  await expect(page.locator('#container-upgrade-image')).toHaveText('nginx:1.25');
+
+  // 经 inspect 自动识别为 Docker Compose (镜像更新) 并推荐升级命令
+  await expect(page.locator('#container-upgrade-type-badge')).toContainText('Docker Compose');
+  await expect(page.locator('#container-upgrade-command')).toHaveValue('cd "/opt/web-app" && docker compose pull && docker compose up -d');
+
+  // 手动切换为 Git 源码更新模式
+  await page.locator('input[name="containerUpgradeMode"][value="compose_git"]').check();
+  await expect(page.locator('#container-upgrade-command')).toHaveValue('cd /opt/myapp && git pull && docker compose up -d --build');
+
+  // 点击「一键添加到计划任务」：应自动跳转至计划任务并打开新建任务弹窗，自动填好任务名与升级命令
+  await page.locator('#container-upgrade-add-cron').click();
+  await expect(dialog).toBeHidden();
+
+  const cronDialog = page.locator('#cron-task-dialog');
+  await expect(cronDialog).toBeVisible();
+  await expect(page.locator('#cron-task-name')).toHaveValue('定时升级: web-nginx');
+  await expect(page.locator('#cron-command-input')).toHaveValue('cd /opt/myapp && git pull && docker compose up -d --build');
+  await expect(page.locator('#cron-task-schedule')).toHaveValue('0 3 * * 0');
+
+  await page.locator('#cron-dialog-cancel').click();
+  await expect(cronDialog).toBeHidden();
+});
+
+test('镜像管理查看列表、拉取新镜像与清理未用镜像', async ({ page }, testInfo) => {
+  const fixture = await fileFixture(page);
+  await openContainers(page);
+
+  // 点击切到「镜像管理」子 Tab
+  await page.locator('#container-subtab-images').click();
+  await expect(page.locator('#container-view-images')).toBeVisible();
+  await expect(page.locator('#container-view-containers')).toBeHidden();
+
+  // 镜像统计与列表渲染
+  await expect(page.locator('#image-summary-total')).toHaveText('2');
+  const imgRows = page.locator('#container-image-table-body tr');
+  await expect(imgRows).toHaveCount(2);
+  await expect(imgRows.nth(0)).toContainText('nginx');
+  await expect(imgRows.nth(0)).toContainText('1.25');
+  await expect(imgRows.nth(0)).toContainText('142MB');
+  await expect(imgRows.nth(1)).toContainText('postgres');
+  await expect(imgRows.nth(1)).toContainText('16-alpine');
+
+  // 测试拉取镜像弹窗
+  await page.locator('#image-btn-pull').click();
+  const pullDialog = page.locator('#container-pull-dialog');
+  await expect(pullDialog).toBeVisible();
+  await page.locator('#container-pull-input').fill('redis:7-alpine');
+  await page.locator('#container-pull-confirm').click();
+  await expect(pullDialog).toBeHidden();
+  await expect.poll(() => fixture.containerCalls.map((c) => c.action)).toContain('pull');
+  expect(fixture.containerCalls).toEqual(expect.arrayContaining([
+    expect.objectContaining({ action: 'pull', target: 'redis:7-alpine' }),
+  ]));
+
+  // 关闭拉取展示的日志弹窗
+  await page.locator('#container-log-dismiss').click();
+  await expect(page.locator('#container-log-dialog')).toBeHidden();
+
+  // 测试清理未用镜像 prune
+  await page.locator('#image-btn-prune').click();
+  await expect(page.locator('#container-confirm-dialog')).toBeVisible();
+  await page.locator('#container-confirm-accept').click();
+  await expect.poll(() => fixture.containerCalls.map((c) => c.action)).toContain('prune_images');
+
+  await page.screenshot({ path: testInfo.outputPath('container-images.png') });
 });
 
 test('容器启停与删除走白名单命令', async ({ page }) => {

@@ -23,9 +23,18 @@ export interface ContainerEntry {
   pids: number | null;
 }
 
+export interface ImageEntry {
+  id: string;
+  repository: string;
+  tag: string;
+  size: string;
+  created: string;
+}
+
 export interface ContainerSnapshot {
   containers: ContainerEntry[];
   images: number | null;
+  imageEntries: ImageEntry[];
   timestamp: number;
 }
 

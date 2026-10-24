@@ -15,6 +15,8 @@ import { FileManager, collectFileManagerElements } from './file-manager';
 import { FileTree } from './file-tree';
 import { ProcessManager, collectProcessManagerElements, type NetworkSample, type ProcessSnapshot } from './process-manager';
 import { ContainerManager, collectContainerManagerElements } from './container-manager';
+import { CronManager, collectCronManagerElements } from './cron-manager';
+import { CronPage } from './cron-page';
 import { resetTerminalForConnection } from './terminal-session';
 import { createTerminalTools, type TerminalToolsController } from './terminal-tools';
 import { WebSocketReconnectManager } from './ws-reconnect';
@@ -316,6 +318,12 @@ const ui = {
   containerManagerPanel: element<HTMLElement>('container-manager-panel'),
   containerLogDialog: element<HTMLDialogElement>('container-log-dialog'),
   containerConfirmDialog: element<HTMLDialogElement>('container-confirm-dialog'),
+  containerUpgradeDialog: element<HTMLDialogElement>('container-upgrade-dialog'),
+  containerPullDialog: element<HTMLDialogElement>('container-pull-dialog'),
+  cronManagerPanel: element<HTMLElement>('cron-manager-panel'),
+  cronTaskDialog: element<HTMLDialogElement>('cron-task-dialog'),
+  cronRunDialog: element<HTMLDialogElement>('cron-run-dialog'),
+  cronConfirmDialog: element<HTMLDialogElement>('cron-confirm-dialog'),
   eventToggle: element<HTMLButtonElement>('event-toggle'),
   eventLogContainer: element<HTMLElement>('event-log-container'),
   eventLogClear: element<HTMLButtonElement>('event-log-clear'),
@@ -399,6 +407,8 @@ let profiles: SavedProfile[] = [];
 let dashboard: Dashboard | undefined;
 let filePage: FilePage | undefined;
 let containerPage: ContainerPage | undefined;
+let cronPage: CronPage | undefined;
+let cronManager: CronManager;
 let workbench: Workbench | undefined;
 /** 当前工作台面板；终端常驻，切换面板不打断 SSH。 */
 let activeWorkbenchTab: WorkbenchTab = 'files';
@@ -730,6 +740,18 @@ containerManager = new ContainerManager({
   getLanguage: () => currentLanguage,
   onError: (message) => event(message, 'container', true),
   onStatus: (message) => event(message, 'container'),
+  onToast: (zh, en, kind) => toast(bilingual(zh, en), kind),
+  onAddToCron: (task) => {
+    dashboard?.showCron();
+    cronPage?.manager.openCreateModal(task);
+  },
+});
+
+cronManager = new CronManager({
+  elements: collectCronManagerElements(),
+  getLanguage: () => currentLanguage,
+  onError: (message) => event(message, 'cron', true),
+  onStatus: (message) => event(message, 'cron'),
   onToast: (zh, en, kind) => toast(bilingual(zh, en), kind),
 });
 
@@ -1161,6 +1183,7 @@ function setState(state: ConnectionState, label?: string): void {
   ui.fullscreenFiles.disabled = state !== 'connected';
   filePage?.setConnection(state, profiles.find((profile) => passwordContext(profile) === currentTargetKey)?.id, currentTargetLabel);
   containerPage?.setConnection(state, profiles.find((profile) => passwordContext(profile) === currentTargetKey)?.id);
+  cronPage?.setConnection(state, profiles.find((profile) => passwordContext(profile) === currentTargetKey)?.id);
   const stateLabel = label ?? ({
     idle: bilingual('离线', 'Offline'),
     connecting: bilingual('连接中', 'Connecting'),
@@ -1477,6 +1500,20 @@ function handleServerMessage(message: ServerMessage): void {
     event(bilingual('容器监控通道已可用。', 'Container monitor channel is available.'), 'container');
     return;
   }
+  if (type === 'cron_attach') {
+    if (typeof message.url !== 'string' || !message.url.startsWith('/api/cron?')) {
+      event(bilingual('收到无效的计划任务连接信息。', 'Received invalid cron connection details.'), 'protocol', true);
+      return;
+    }
+    try {
+      cronManager.attach(message.url);
+    } catch {
+      event(bilingual('无法打开计划任务连接。', 'Could not open the cron connection.'), 'cron', true);
+      return;
+    }
+    event(bilingual('计划任务通道已可用。', 'Cron channel is available.'), 'cron');
+    return;
+  }
   if (type === 'host_key') {
     const fingerprint = message.fingerprint ?? '';
     const keyType = message.keyType ?? '';
@@ -1604,6 +1641,7 @@ function failActiveConnection(activeSocket: WebSocket | null, closeReason: strin
   fileTree?.setReady(false);
   processManager.reset();
   containerManager.reset();
+  cronManager.reset();
   resetNetworkMetric();
   clearHostKeyPrompt();
   invalidateHistoryPasswordLoad();
@@ -1728,6 +1766,7 @@ function handleSshReconnectLog(entry: ReconnectLogEntry): void {
     fileTree?.setReady(false);
     processManager.reset();
     containerManager.reset();
+    cronManager.reset();
   } else if (entry.event === 'reconnect_attempt') {
     updateConnectionStatus(localized(
       `正在重连 SSH（${entry.attempt}/${entry.maxAttempts}）…`,
@@ -1753,9 +1792,9 @@ async function connect(): Promise<void> {
     showFormError(validationError);
     return;
   }
-  // 工作台内连接后停在当前面板；从总览发起的连接切到终端。
-  const workbenchView = document.body.dataset.view === 'workbench';
-  if (!workbenchView) openWorkbenchTab('terminal');
+  // 工作台内或独立页面（如计划任务）连接后停在当前面板；只有从总览发起的连接才切到终端。
+  const inWorkspaceOrPage = document.body.dataset.view === 'workbench' || document.body.dataset.view === 'cron';
+  if (!inWorkspaceOrPage) openWorkbenchTab('terminal');
   if (location.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
     showFormError(bilingual('发送 SSH 凭据前必须使用 HTTPS。', 'HTTPS is required before SSH credentials can be sent.'));
     return;
@@ -1912,6 +1951,7 @@ async function connect(): Promise<void> {
       fileTree?.setReady(false);
       processManager.reset();
       containerManager.reset();
+      cronManager.reset();
       resetNetworkMetric();
       clearHostKeyPrompt();
       invalidateHistoryPasswordLoad();
@@ -1967,6 +2007,7 @@ function disconnect(reason = bilingual('已由用户断开连接', 'Disconnected
   fileTree?.setReady(false);
   processManager.reset();
   containerManager.reset();
+  cronManager.reset();
   resetNetworkMetric();
   clearHostKeyPrompt();
   invalidateHistoryPasswordLoad();
@@ -2300,6 +2341,7 @@ window.addEventListener('beforeunload', () => {
   fileTree?.destroy();
   processManager.reset();
   containerManager.reset();
+  cronManager.reset();
   resetNetworkMetric();
   socket?.close(1000, 'Page closed');
 });
@@ -2336,8 +2378,11 @@ async function initialize(): Promise<void> {
   initializeCompatibilityAPI();
   applyURLParameters();
   // 两个视图共用指纹确认与通知，不能随隐藏的终端容器一起消失。
-  document.body.append(ui.hostKeyDialog, ui.toastRegion, ui.filePreviewDialog, ui.filePropertiesDialog, ui.fileEditorDialog,
-    ui.containerLogDialog, ui.containerConfirmDialog);
+  document.body.append(
+    ui.hostKeyDialog, ui.toastRegion, ui.filePreviewDialog, ui.filePropertiesDialog, ui.fileEditorDialog,
+    ui.containerLogDialog, ui.containerConfirmDialog, ui.containerUpgradeDialog, ui.containerPullDialog,
+    ui.cronTaskDialog, ui.cronRunDialog, ui.cronConfirmDialog,
+  );
   filePage = new FilePage(ui.fileManagerPanel, {
     connect: async (host) => {
       const loading = applyProfile(host);
@@ -2362,6 +2407,17 @@ async function initialize(): Promise<void> {
     },
     disconnect: () => disconnect(),
   }, containerManager);
+  cronPage = new CronPage(ui.cronManagerPanel, {
+    connect: async (host) => {
+      const profile = profiles.find((item) => item.id === host.id);
+      if (!profile) throw new Error('主机不存在或已被删除。');
+      const loading = applyProfile(profile);
+      const selectionGeneration = historyPasswordLoadGeneration;
+      await loading;
+      if (selectionGeneration === historyPasswordLoadGeneration && document.body.dataset.view === 'cron') await connect();
+    },
+    disconnect: () => disconnect(),
+  }, cronManager);
   workbench = new Workbench(filePage, containerPage, ui.terminalCard, {
     openFiles: () => undefined,
     openContainers: () => undefined,
@@ -2377,6 +2433,7 @@ async function initialize(): Promise<void> {
   dashboard = new Dashboard({
     files: filePage,
     containers: containerPage,
+    cron: cronPage,
     openWorkbench: (tab) => openWorkbenchTab(tab),
     snippets: new Snippets(ui.terminalCard, (snippet) => {
       // 片段只进入草稿，尤其多行命令不能通过粘贴意外立即执行。
