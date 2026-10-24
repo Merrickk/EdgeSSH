@@ -63,7 +63,7 @@ body[data-view='dashboard'] { overflow-y: auto; background: var(--home-bg); }
 .hosts-pane { padding-right: 28px; min-width: 0; }
 .home-section-heading { display: flex; gap: 16px; align-items: center; justify-content: space-between; margin-bottom: 23px; }
 .home-eyebrow { font-family: var(--home-mono); font-size: 10px; letter-spacing: 1.6px; font-weight: 500; margin: 0 0 10px; color: var(--home-muted); }
-.home-section-heading h1 { margin: 0; font-size: 29px; line-height: 1.3; letter-spacing: -.9px; font-weight: 700; }
+.home-section-heading h1 { margin: 0; font-size: 24px; line-height: 1.25; letter-spacing: -.5px; font-weight: 700; }
 .home-section-heading p:last-child { margin: 8px 0 0; color: var(--home-muted); font-size: 13px; }
 .host-filters { display: flex; gap: 16px; flex-wrap: wrap; border-bottom: 1px solid var(--home-line); margin-bottom: 12px; }
 #dashboard .host-filters button { padding: 12px 2px; color: var(--home-muted); background: none; font-size: 12px; white-space: nowrap; border-bottom: 3px solid transparent; }

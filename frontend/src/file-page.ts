@@ -28,6 +28,9 @@ export class FilePage {
     this.root.className = 'files-page';
     this.root.hidden = true;
     this.root.innerHTML = `
+      <header class="files-heading">
+        <h1 id="files-heading" tabindex="-1">文件</h1>
+      </header>
       <section class="files-connection" aria-label="文件管理连接">
         <span class="files-host-icon">${folderIcon}</span>
         <label class="files-host-field" for="files-host"><span>目标主机</span>

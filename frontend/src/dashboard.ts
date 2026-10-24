@@ -4,8 +4,8 @@ import type { FilePage } from './file-page';
 import type { Snippets } from './snippets';
 import { ForwardPage } from './forward-page';
 import type { ContainerPage } from './container-page';
+import type { TerminalPage } from './terminal-page';
 import type { CronPage } from './cron-page';
-import { Workbench, type WorkbenchTab } from './workbench';
 import { countryFlag } from './flags';
 import { systemIcon } from './os-icons';
 import './dashboard.css';
@@ -13,13 +13,11 @@ import './dashboard.css';
 interface DashboardActions {
   files: FilePage;
   containers: ContainerPage;
+  terminal: TerminalPage;
   cron: CronPage;
-  /** 打开统一工作台并切换到指定面板；终端常驻其中。 */
-  openWorkbench(tab: WorkbenchTab): void;
   snippets: Snippets;
   refresh(): Promise<CloudHost[]>;
   connect(host: CloudHost): Promise<void>;
-  quickConnect(): void;
   leaveWorkspace(): void;
 }
 
@@ -53,8 +51,6 @@ export class Dashboard {
   private readonly form: HTMLFormElement;
   private readonly forwarding = new ForwardPage();
   private readonly actions: DashboardActions;
-  /** 由 main.ts 注入：三个面板共用一层外壳，终局面板常驻其中。 */
-  private workbench: Workbench | null = null;
 
   constructor(actions: DashboardActions) {
     this.actions = actions;
@@ -69,25 +65,25 @@ export class Dashboard {
       <div class="home-layout">
         <nav class="home-rail" aria-label="主导航">
           <button class="rail-item selected" id="rail-overview" aria-current="page">${icon('home')}<span>总览</span></button>
+          <button class="rail-item" id="rail-terminal">${icon('terminal')}<span>终端</span></button>
           <button class="rail-item" id="rail-files">${icon('folder')}<span>文件</span></button>
           <button class="rail-item" id="rail-containers">${icon('container')}<span>容器</span></button>
           <button class="rail-item" id="rail-cron">${icon('clock')}<span>计划任务</span></button>
           <button class="rail-item" id="rail-snippets">${icon('snippets')}<span>代码片段</span></button>
           <button class="rail-item" id="rail-forward">${icon('forward')}<span>端口转发</span></button>
-          <button class="rail-item" id="quick-connect">${icon('terminal')}<span>快速连接</span></button>
           <span class="rail-security" title="管理员身份认证">${icon('shield')}<span id="auth-provider-label">身份<br>保护</span></span>
         </nav>
         <main class="home-content">
           <div id="home-notice" class="home-notice" role="status" hidden></div>
           <div class="home-main-grid">
             <section class="hosts-pane" aria-labelledby="hosts-heading">
-              <div class="home-section-heading"><div><p class="home-eyebrow">YOUR INFRASTRUCTURE</p><h1 id="hosts-heading">我的主机</h1><p>安全保存，随处连接。</p></div><button class="home-button" data-add>＋ 添加主机</button></div>
+              <div class="home-section-heading"><h1 id="hosts-heading">我的主机</h1><button class="home-button" data-add>＋ 添加主机</button></div>
               <div class="host-filters" id="host-filters" aria-label="按分组筛选"></div>
               <div id="host-list" class="host-list" aria-live="polite"><p class="home-empty">正在从云端加载主机…</p></div>
               <div class="host-list-footer"><span id="host-total">0 台主机</span><button class="home-text-button" id="refresh-hosts">刷新列表 ↻</button></div>
             </section>
             <section class="globe-pane" aria-labelledby="globe-heading">
-              <div class="globe-heading"><p class="home-eyebrow">A SMALLER WORLD</p><h2 id="globe-heading">散布全球，<br><span>就在手边。</span></h2><p>点击国旗，即刻连接。</p></div>
+              <div class="globe-heading"><h2 id="globe-heading">散布全球，<span>就在手边。</span></h2></div>
               <div class="host-globe" id="host-globe" aria-label="主机地理分布，可拖动旋转；也可使用主机列表连接"></div>
               <div class="globe-meta"><span id="region-count">0 个地区</span><button id="pause-globe" class="home-text-button" aria-pressed="false">暂停旋转</button></div>
               <p class="globe-caption">城市级近似定位 · 位置不代表在线状态</p>
@@ -102,7 +98,7 @@ export class Dashboard {
       </div>
       <dialog id="host-editor-dialog" class="host-dialog" aria-labelledby="host-dialog-title">
         <form id="cloud-host-form" autocomplete="off">
-          <div class="dialog-heading"><div><p class="home-eyebrow">ENCRYPTED HOST</p><h2 id="host-dialog-title">添加主机</h2></div><button type="button" class="home-button close-dialog" aria-label="关闭">×</button></div>
+          <div class="dialog-heading"><h2 id="host-dialog-title">添加主机</h2><button type="button" class="home-button close-dialog" aria-label="关闭">×</button></div>
           <p class="dialog-intro">保存到你的云端主机库，不会写入浏览器本地存储。</p>
           <div class="host-form-grid">
             <label>名称<input name="name" maxlength="80" placeholder="例如：Tokyo VPS" required></label>
@@ -131,10 +127,16 @@ export class Dashboard {
     document.body.prepend(this.root);
     // 文件 / 容器页的 root 由 Workbench.mount() 收进自己的面板槽，
     // 这里只挂工作台本身，避免两个页面并列把工作台挤出可视区。
-    this.get('.home-content').append(this.actions.cron.root);
-    this.get('.home-content').append(this.actions.snippets.page);
-    // 转发页放在 .home-content（第二列）；home-layout 只定义了两列。
-    this.get('.home-content').append(this.forwarding.root);
+    // 每个页面都是直接挂载在 .home-content 内的平级视图，靠互斥显隐杜绝重叠泄漏
+    const content = this.get('.home-content');
+    content.append(
+      this.actions.terminal.root,
+      this.actions.files.root,
+      this.actions.containers.root,
+      this.actions.cron.root,
+      this.actions.snippets.page,
+      this.forwarding.root,
+    );
     this.dialog = this.get<HTMLDialogElement>('#host-editor-dialog');
     this.form = this.get<HTMLFormElement>('#cloud-host-form');
     this.get('#account-action').addEventListener('click', async (event) => {
@@ -152,22 +154,14 @@ export class Dashboard {
     this.dialog.addEventListener('close', () => { this.form.reset(); this.editing = undefined; this.returnFocus?.focus(); });
     this.get('#host-search').addEventListener('input', () => this.renderList());
     this.get('#refresh-hosts').addEventListener('click', () => void this.refresh());
-    this.get('#rail-overview').addEventListener('click', () => {
-      if (!this.actions.files.confirmLeave()) return;
-      if (!this.isHome) this.actions.leaveWorkspace();
-      this.show();
-      this.get<HTMLInputElement>('#host-search').focus();
-    });
+    this.get('#rail-overview').addEventListener('click', () => this.showOverview());
+    this.get('#rail-terminal').addEventListener('click', () => this.showTerminal());
     this.get('#rail-files').addEventListener('click', () => this.showFiles());
     this.get('#rail-containers').addEventListener('click', () => this.showContainers());
     this.get('#rail-cron').addEventListener('click', () => this.showCron());
     this.get('#rail-snippets').addEventListener('click', () => this.showSnippets());
     this.get('#rail-forward').addEventListener('click', () => this.showForwarding());
-    for (const id of ['#quick-connect', '#bottom-quick']) this.get(id).addEventListener('click', () => {
-      if (this.busy || !this.actions.files.confirmLeave()) return;
-      this.actions.leaveWorkspace();
-      this.enterWorkbench('terminal'); this.actions.quickConnect();
-    });
+    this.get('#bottom-quick').addEventListener('click', () => this.showTerminal());
     this.field('authMethod').addEventListener('change', () => this.updateCredentialFields());
     this.field('cfTunnel').addEventListener('change', () => this.updateCredentialFields());
     this.form.addEventListener('submit', (event) => { event.preventDefault(); void this.save(); });
@@ -207,14 +201,6 @@ export class Dashboard {
     this.get('.header-add').hidden = true;
   }
 
-  /** 挂载统一工作台；终局面板由 main.ts 提供，切换面板不打断 SSH 会话。 */
-  attachWorkbench(workbench: Workbench): void {
-    this.workbench = workbench;
-    // 必须放进 .home-content（第二列）：home-layout 只定义了两列，
-    // 直接 append 会让工作台落到侧边栏那一列。
-    this.get('.home-content').append(workbench.root);
-  }
-
   private get<T extends HTMLElement = HTMLElement>(selector: string): T { return this.root.querySelector<T>(selector)!; }
   private field(name: string): HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement {
     return this.form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
@@ -244,6 +230,7 @@ export class Dashboard {
 
   setHosts(hosts: CloudHost[]): void {
     this.hosts = hosts;
+    this.actions.terminal.setHosts(hosts);
     this.actions.files.setHosts(hosts);
     this.actions.containers.setHosts(hosts.map((host) => ({
       id: host.id, name: host.name, username: host.username, host: host.host, port: host.port,
@@ -267,93 +254,102 @@ export class Dashboard {
     finally { button.disabled = false; }
   }
 
-  show(): void {
-    this.forwarding.hide();
-    this.actions.snippets.hide();
-    this.actions.cron.hide();
-    this.isHome = true; this.root.hidden = false;
-    // 总览内容与三个面板互斥显示。
-    for (const selector of ['.home-main-grid', '.home-bottom', '.home-footer']) {
-      this.get(selector).hidden = false;
+  /**
+   * 总览视图：隐藏其他所有 6 个独立页面，只展示总览的网格与地球，
+   * 彻底杜绝在总览页面下方泄漏出容器、文件或其他页面的问题。
+   */
+  showOverview(): void {
+    if (!this.actions.files.confirmLeave()) return;
+    if (!this.isHome) this.actions.leaveWorkspace();
+    this.hideAllPagesExcept(null);
+    this.isHome = true;
+    this.root.hidden = false;
+    for (const sel of ['.home-main-grid', '.home-bottom', '.home-footer']) {
+      this.get(sel).hidden = false;
     }
-    this.get('#home-notice').hidden = true;
     this.get('.home-search').hidden = false;
     this.get('.header-add').hidden = false;
-    this.get('.home-content').hidden = false;
-    this.selectNavigation('rail-overview');
+    this.get('#home-notice').hidden = true;
     document.getElementById('app')!.hidden = true;
     document.body.dataset.view = 'dashboard';
+    this.selectNavigation('rail-overview');
     this.globe?.setActive(!this.paused);
   }
 
-  returnHome(): void {
-    if (!this.actions.files.confirmLeave()) return;
-    this.actions.leaveWorkspace();
-    this.show();
-    void this.refresh();
+  show(): void {
+    this.showOverview();
   }
 
-  /**
-   * 进入工作台：只隐藏总览自己的内容（地球、统计、页脚），
-   * 保留 .home-content 作为三个面板的容器——工作台就挂在这里面。
-   */
-  enterWorkbench(tab: WorkbenchTab): void {
-    this.forwarding.hide();
-    this.actions.snippets.hide();
-    this.actions.cron.hide();
-    this.isHome = false; this.root.hidden = false;
-    this.hideOverviewBlocks();
-    document.body.dataset.view = 'workbench';
-    this.selectNavigation(tab === 'files' ? 'rail-files' : tab === 'containers' ? 'rail-containers' : 'rail-overview');
-    this.globe?.setActive(false);
-    // 片段浮窗挂在终局面板内，进入工作台时强制刷新，切到终端即可用。
+  showTerminal(): void {
+    this.hideAllPagesExcept('terminal');
+    document.body.dataset.view = 'terminal';
+    this.selectNavigation('rail-terminal');
+    this.actions.terminal.show();
     this.actions.snippets.refresh();
   }
 
-  showFiles(): void { this.actions.openWorkbench('files'); }
+  showFiles(): void {
+    this.hideAllPagesExcept('files');
+    document.body.dataset.view = 'files';
+    this.selectNavigation('rail-files');
+    this.actions.files.show();
+  }
 
-  showContainers(): void { this.actions.openWorkbench('containers'); }
+  showContainers(): void {
+    this.hideAllPagesExcept('containers');
+    document.body.dataset.view = 'containers';
+    this.selectNavigation('rail-containers');
+    this.actions.containers.show();
+  }
 
   showCron(): void {
-    if (!this.actions.files.confirmLeave()) return;
-    this.forwarding.hide();
-    this.actions.snippets.hide();
-    this.isHome = false; this.root.hidden = false;
-    this.hideOverviewBlocks();
-    document.getElementById('app')!.hidden = true;
+    this.hideAllPagesExcept('cron');
     document.body.dataset.view = 'cron';
     this.selectNavigation('rail-cron');
-    this.globe?.setActive(false);
     this.actions.cron.show();
   }
 
-  showTerminal(): void { this.actions.openWorkbench('terminal'); }
-
   showSnippets(): void {
     if (!this.actions.files.confirmLeave()) return;
-    this.forwarding.hide();
-    this.actions.cron.hide();
-    // 仅切换视图，不结束 SSH；在片段页编辑后可回到同一会话。
-    this.isHome = false; this.root.hidden = false;
-    this.hideOverviewBlocks();
-    document.getElementById('app')!.hidden = true;
+    this.hideAllPagesExcept('snippets');
     document.body.dataset.view = 'snippets';
     this.selectNavigation('rail-snippets');
-    this.globe?.setActive(false);
     this.actions.snippets.show();
   }
 
   showForwarding(): void {
     if (!this.actions.files.confirmLeave()) return;
-    this.actions.snippets.hide();
-    this.actions.cron.hide();
-    this.isHome = false; this.root.hidden = false;
-    this.hideOverviewBlocks();
-    document.getElementById('app')!.hidden = true;
+    this.hideAllPagesExcept('forward');
     document.body.dataset.view = 'forward';
     this.selectNavigation('rail-forward');
-    this.globe?.setActive(false);
     this.forwarding.show();
+  }
+
+  /**
+   * 核心互斥保证：除目标页面外，其他所有页面立即调用 hide() 设为 hidden，
+   * 总览专属内容块全部隐藏，彻底杜绝任何页面下方出现容器或其他页面的残留。
+   */
+  private hideAllPagesExcept(active: 'terminal' | 'files' | 'containers' | 'cron' | 'snippets' | 'forward' | null): void {
+    this.isHome = active === null;
+    this.root.hidden = false;
+    document.getElementById('app')!.hidden = true;
+    this.globe?.setActive(false);
+    for (const sel of ['.home-main-grid', '.home-bottom', '.home-footer', '#home-notice', '.home-search', '.header-add']) {
+      this.get(sel).hidden = true;
+    }
+    if (active !== 'terminal') this.actions.terminal.hide();
+    if (active !== 'files') this.actions.files.hide();
+    if (active !== 'containers') this.actions.containers.hide();
+    if (active !== 'cron') this.actions.cron.hide();
+    if (active !== 'snippets') this.actions.snippets.hide();
+    if (active !== 'forward') this.forwarding.hide();
+  }
+
+  returnHome(): void {
+    if (!this.actions.files.confirmLeave()) return;
+    this.actions.leaveWorkspace();
+    this.showOverview();
+    void this.refresh();
   }
 
   private selectNavigation(id: string): void {
@@ -479,12 +475,11 @@ export class Dashboard {
     }
   }
 
+  /** 总览点击连接主机：直接切到终端页面并连接该主机（满足需求 1） */
   private async connectHost(host: CloudHost): Promise<void> {
     if (this.busy) return;
     this.busy = true; this.root.setAttribute('aria-busy', 'true');
-    this.notice(`正在读取 ${host.name} 的连接凭据…`);
-    this.enterWorkbench('terminal');
-    this.get('#home-notice').hidden = true;
+    this.showTerminal();
     try { await this.actions.connect(host); }
     catch (error) { this.notice(error instanceof Error ? error.message : '连接准备失败。'); }
     finally { this.busy = false; this.root.removeAttribute('aria-busy'); }

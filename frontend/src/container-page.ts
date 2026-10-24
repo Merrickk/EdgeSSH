@@ -38,6 +38,9 @@ export class ContainerPage {
     this.root.className = 'containers-page';
     this.root.hidden = true;
     this.root.innerHTML = `
+      <header class="containers-heading">
+        <h1 id="containers-heading" tabindex="-1">容器</h1>
+      </header>
       <section class="containers-connection" aria-label="容器管理连接">
         <span class="containers-host-icon">${folderIcon}</span>
         <label class="containers-host-field" for="containers-host"><span>目标主机</span>
@@ -49,7 +52,6 @@ export class ContainerPage {
       </section>
       <p id="containers-notice" class="containers-notice" role="status" hidden></p>
       <section class="containers-browser" aria-label="远程容器">
-        <div class="containers-browser-heading"><strong>${folderIcon}容器列表</strong><span>docker ps · docker stats</span></div>
         <div class="containers-panel-slot"></div>
       </section>
       <footer class="containers-footer"><span>启停 / 重启 / 暂停直接生效 · 删除需确认且只能删除已停止的容器</span>

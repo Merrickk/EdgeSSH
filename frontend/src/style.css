@@ -1465,6 +1465,8 @@ button:disabled {
 }
 
 .command-editor {
+  position: relative;
+  z-index: 10;
   display: grid;
   height: 176px;
   min-height: 0;
@@ -2846,14 +2848,69 @@ body[data-view='files'] .file-dialog::backdrop { background: rgba(17, 24, 39, 0.
 #container-manager-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* Container upgrade & image pull dialogs */
-.container-upgrade-dialog { width: min(840px, calc(100vw - 28px)); }
+/* 弹窗白橙主题风格：彻底杜绝深色黑底，与整体保持一致 */
+.container-upgrade-dialog,
+.container-pull-dialog,
+.container-log-dialog,
+.cron-task-dialog,
+.cron-run-dialog {
+  background: #ffffff !important;
+  color: #111827 !important;
+  border: 1px solid #e9ecf1 !important;
+  box-shadow: 0 20px 60px rgba(17, 24, 39, 0.14) !important;
+}
+
+.container-upgrade-dialog::backdrop,
+.container-pull-dialog::backdrop,
+.container-log-dialog::backdrop,
+.cron-task-dialog::backdrop,
+.cron-run-dialog::backdrop {
+  background: rgba(17, 24, 39, 0.32) !important;
+}
+
+.container-upgrade-dialog .file-dialog-header,
+.container-pull-dialog .file-dialog-header,
+.container-log-dialog .file-dialog-header,
+.cron-task-dialog .file-dialog-header,
+.cron-run-dialog .file-dialog-header {
+  background: #ffffff !important;
+  border-bottom: 1px solid #eff2f6 !important;
+}
+
+.container-upgrade-dialog .file-dialog-header h2,
+.container-pull-dialog .file-dialog-header h2,
+.container-log-dialog .file-dialog-header h2,
+.cron-task-dialog .file-dialog-header h2,
+.cron-run-dialog .file-dialog-header h2 {
+  color: #111827 !important;
+}
+
+.container-upgrade-dialog .file-dialog-actions,
+.container-pull-dialog .file-dialog-actions,
+.container-log-dialog .file-dialog-actions,
+.cron-task-dialog .file-dialog-actions,
+.cron-run-dialog .file-dialog-actions {
+  background: #ffffff !important;
+  border-top: 1px solid #eff2f6 !important;
+}
+
+.container-upgrade-dialog .file-dialog-close,
+.container-pull-dialog .file-dialog-close,
+.container-log-dialog .file-dialog-close,
+.cron-task-dialog .file-dialog-close,
+.cron-run-dialog .file-dialog-close {
+  background: #f4f6f9 !important;
+  border-color: #e9ecf1 !important;
+  color: #667085 !important;
+}
 
 .container-upgrade-body {
   display: flex;
   flex-direction: column;
   gap: 14px;
   padding: 16px 20px;
-  background: var(--surface);
+  background: #ffffff !important;
+  color: #111827 !important;
 }
 
 .container-upgrade-meta {
@@ -2861,35 +2918,23 @@ body[data-view='files'] .file-dialog::backdrop { background: rgba(17, 24, 39, 0.
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   padding: 10px 14px;
-  border: 1px solid var(--border);
+  border: 1px solid #e9ecf1 !important;
   border-radius: 8px;
-  background: var(--surface-2);
+  background: #fafbfd !important;
 }
 
-.container-upgrade-meta-item { display: flex; flex-direction: column; gap: 2px; }
-.container-upgrade-meta-item span { font-size: 11px; color: var(--muted); }
-.container-upgrade-meta-item strong { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.container-upgrade-meta-item code { font: 11px var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.container-type-badge {
-  display: inline-block;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  background: var(--home-accent-soft);
-  color: var(--home-accent-hover);
-  width: fit-content;
-}
+.container-upgrade-meta-item span { font-size: 11px; color: #667085 !important; }
+.container-upgrade-meta-item strong { font-size: 13px; color: #111827 !important; }
+.container-upgrade-meta-item code { font: 11px var(--mono); color: #111827 !important; }
 
 .container-upgrade-modes {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 8px 12px;
-  border: 1px solid var(--border-soft);
+  padding: 10px 14px;
+  border: 1px solid #e9ecf1 !important;
   border-radius: 6px;
-  background: var(--surface-2);
+  background: #fafbfd !important;
 }
 
 .container-upgrade-mode-label {
@@ -2898,7 +2943,7 @@ body[data-view='files'] .file-dialog::backdrop { background: rgba(17, 24, 39, 0.
   gap: 8px;
   font-size: 12px;
   cursor: pointer;
-  color: var(--text);
+  color: #111827 !important;
 }
 
 .container-upgrade-cmd-label {
@@ -2906,19 +2951,21 @@ body[data-view='files'] .file-dialog::backdrop { background: rgba(17, 24, 39, 0.
   flex-direction: column;
   gap: 6px;
   font-size: 12px;
-  color: var(--muted);
+  color: #667085 !important;
 }
 
 #container-upgrade-command {
   width: 100%;
   padding: 8px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid #e9ecf1 !important;
   border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
+  background: #ffffff !important;
+  color: #111827 !important;
   font: 12px/1.5 var(--mono);
   box-sizing: border-box;
 }
+
+.container-upgrade-dialog { width: min(840px, calc(100vw - 28px)); }
 
 #container-upgrade-command:focus {
   border-color: var(--accent);
@@ -3081,11 +3128,41 @@ body[data-view='files'] .file-dialog::backdrop { background: rgba(17, 24, 39, 0.
   word-break: normal;
 }
 
+.container-upgrade-dialog #container-upgrade-add-cron,
+.container-upgrade-dialog #container-upgrade-dismiss {
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #334155 !important;
+  font-weight: 500 !important;
+  border-radius: 7px !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+}
+
+.container-upgrade-dialog #container-upgrade-add-cron:hover,
+.container-upgrade-dialog #container-upgrade-dismiss:hover {
+  background: #f8fafc !important;
+  color: #0f172a !important;
+  border-color: #94a3b8 !important;
+}
+
+.container-upgrade-dialog #container-upgrade-exec {
+  background: var(--home-accent, #f4511e) !important;
+  border: 1px solid var(--home-accent, #f4511e) !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+  border-radius: 7px !important;
+}
+
+.container-upgrade-dialog #container-upgrade-exec:hover {
+  background: var(--home-accent-hover, #d53b0a) !important;
+}
+
 @media (max-width: 600px) {
   .container-log-dialog { width: 100vw; }
   .container-summary-item { min-width: 0; flex-basis: 50%; }
   .container-log-meta { flex-wrap: wrap; }
   .container-log-body { max-height: calc(100dvh - 220px); }
+  .container-table-wrap { min-height: 380px !important; }
 }
 
 .process-manager {
@@ -4601,14 +4678,58 @@ body[data-view='workspace'] .terminal-key-scroll {
 
 body[data-view='workspace'] .terminal-key,
 body[data-view='workspace'] .command-editor-toggle,
+body[data-view='terminal'] .command-editor-toggle,
 body[data-view='workspace'] .command-editor-action,
+body[data-view='terminal'] .command-editor-action,
 body[data-view='workspace'] .command-editor-close,
-body[data-view='workspace'] .command-send-options button {
+body[data-view='terminal'] .command-editor-close,
+body[data-view='workspace'] .command-send-options button,
+body[data-view='terminal'] .command-send-options button {
   border: 1px solid #dce2ec;
   border-radius: 6px;
   background: #ffffff;
   color: #1e293b;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+body[data-view='workspace'] .command-editor,
+body[data-view='terminal'] .command-editor {
+  background: var(--home-surface, #ffffff);
+}
+
+body[data-view='workspace'] .command-editor-header,
+body[data-view='terminal'] .command-editor-header {
+  border-bottom: 1px solid var(--home-line, #e9ecf1);
+  background: #f8fafc;
+  color: var(--home-muted, #667085);
+  font-weight: 600;
+}
+
+body[data-view='workspace'] .command-editor-close,
+body[data-view='terminal'] .command-editor-close {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--home-muted, #667085);
+}
+
+body[data-view='workspace'] .command-editor-close:hover,
+body[data-view='terminal'] .command-editor-close:hover {
+  border-color: var(--home-line, #e9ecf1);
+  background: #f1f5f9;
+  color: var(--home-ink, #111827);
+}
+
+body[data-view='workspace'] #command-editor-input,
+body[data-view='terminal'] #command-editor-input {
+  background: #ffffff;
+  color: var(--home-ink, #111827);
+}
+
+body[data-view='workspace'] .command-editor-actions,
+body[data-view='terminal'] .command-editor-actions {
+  border-top: 1px solid var(--home-line, #e9ecf1);
+  background: #f8fafc;
 }
 
 body[data-view='workspace'] .terminal-key:hover:not(:disabled),

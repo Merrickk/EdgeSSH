@@ -7,7 +7,7 @@ import { listHosts, hostCredentials, saveHost, removeHost, updateHostSystem, typ
 import { Dashboard } from './dashboard';
 import { FilePage } from './file-page';
 import { ContainerPage } from './container-page';
-import { Workbench, type WorkbenchTab } from './workbench';
+import { TerminalPage } from './terminal-page';
 import { Snippets } from './snippets';
 import { resolveConnectionControl, resolveConnectionPanel } from './ui-state';
 import { classifyHostKey, SSH_FINGERPRINT_RE, type HostKeyPrompt } from './host-key';
@@ -409,16 +409,7 @@ let filePage: FilePage | undefined;
 let containerPage: ContainerPage | undefined;
 let cronPage: CronPage | undefined;
 let cronManager: CronManager;
-let workbench: Workbench | undefined;
-/** 当前工作台面板；终端常驻，切换面板不打断 SSH。 */
-let activeWorkbenchTab: WorkbenchTab = 'files';
-
-/** 从任意入口切到工作台指定面板（总览状态 + 面板显示一起切）。 */
-function openWorkbenchTab(tab: WorkbenchTab): void {
-  activeWorkbenchTab = tab;
-  workbench?.show(tab);
-  dashboard?.enterWorkbench(tab);
-}
+let terminalPage: TerminalPage | undefined;
 let hostKeys: Record<string, string> = {};
 let socket: WebSocket | null = null;
 let connectionState: ConnectionState = 'idle';
@@ -1154,9 +1145,10 @@ function showFormError(message: string, alternate?: string): void {
   currentFormError = messageTranslation(message, alternate);
   ui.formError.textContent = localize(currentFormError);
   ui.formError.hidden = false;
-  if (document.body.dataset.view === 'workbench' && activeWorkbenchTab === 'files') {
-    filePage?.setMessage(localize(currentFormError), true);
-  }
+  if (document.body.dataset.view === 'files') filePage?.setMessage(localize(currentFormError), true);
+  if (document.body.dataset.view === 'containers') containerPage?.setMessage(localize(currentFormError), true);
+  if (document.body.dataset.view === 'terminal') terminalPage?.setMessage(localize(currentFormError), true);
+  if (document.body.dataset.view === 'cron') cronPage?.setMessage(localize(currentFormError), true);
 }
 
 function toast(message: string, kind: 'info' | 'error' = 'info'): void {
@@ -1181,9 +1173,11 @@ function updateConnectionStatus(message: LocalizedMessage): void {
 function setState(state: ConnectionState, label?: string): void {
   connectionState = state;
   ui.fullscreenFiles.disabled = state !== 'connected';
-  filePage?.setConnection(state, profiles.find((profile) => passwordContext(profile) === currentTargetKey)?.id, currentTargetLabel);
-  containerPage?.setConnection(state, profiles.find((profile) => passwordContext(profile) === currentTargetKey)?.id);
-  cronPage?.setConnection(state, profiles.find((profile) => passwordContext(profile) === currentTargetKey)?.id);
+  const currentId = profiles.find((profile) => passwordContext(profile) === currentTargetKey)?.id;
+  terminalPage?.setConnection(state, currentId);
+  filePage?.setConnection(state, currentId, currentTargetLabel);
+  containerPage?.setConnection(state, currentId);
+  cronPage?.setConnection(state, currentId);
   const stateLabel = label ?? ({
     idle: bilingual('离线', 'Offline'),
     connecting: bilingual('连接中', 'Connecting'),
@@ -1792,9 +1786,11 @@ async function connect(): Promise<void> {
     showFormError(validationError);
     return;
   }
-  // 工作台内或独立页面（如计划任务）连接后停在当前面板；只有从总览发起的连接才切到终端。
-  const inWorkspaceOrPage = document.body.dataset.view === 'workbench' || document.body.dataset.view === 'cron';
-  if (!inWorkspaceOrPage) openWorkbenchTab('terminal');
+  // 在独立页面连接后停留在该页面；若在总览发起，由 connectHost 负责切换到终端页。
+  const activeView = document.body.dataset.view;
+  if (activeView !== 'terminal' && activeView !== 'files' && activeView !== 'containers' && activeView !== 'cron') {
+    dashboard?.showTerminal();
+  }
   if (location.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
     showFormError(bilingual('发送 SSH 凭据前必须使用 HTTPS。', 'HTTPS is required before SSH credentials can be sent.'));
     return;
@@ -1820,8 +1816,7 @@ async function connect(): Promise<void> {
   currentRememberedFingerprint = '';
   if (pinnedKey) ui.fingerprint.value = pinnedKey;
   // 文件管理不应在隐藏终端里执行用户的初始命令；保存的主机配置仍保持原样。
-  const inFilePanel = document.body.dataset.view === 'workbench' && activeWorkbenchTab === 'files';
-  currentInitialCommand = inFilePanel ? '' : ui.initialCommand.value;
+  currentInitialCommand = document.body.dataset.view === 'files' ? '' : ui.initialCommand.value;
   initialCommandSent = false;
   pendingHostKey = null;
   awaitingHostKeyDecision = false;
@@ -2383,17 +2378,33 @@ async function initialize(): Promise<void> {
     ui.containerLogDialog, ui.containerConfirmDialog, ui.containerUpgradeDialog, ui.containerPullDialog,
     ui.cronTaskDialog, ui.cronRunDialog, ui.cronConfirmDialog,
   );
+  terminalPage = new TerminalPage(ui.terminalCard, {
+    connectHost: async (host) => {
+      await applyProfile(host);
+      await connect();
+    },
+    connectCustom: async (params) => {
+      ui.host.value = params.host;
+      ui.port.value = String(params.port);
+      ui.username.value = params.username;
+      setAuthMethod(params.authMethod);
+      if (params.password) ui.password.value = params.password;
+      ui.cfTunnel.value = params.cfTunnel ? 'true' : 'false';
+      await connect();
+    },
+    disconnect: () => disconnect(),
+  });
+
   filePage = new FilePage(ui.fileManagerPanel, {
     connect: async (host) => {
       const loading = applyProfile(host);
       const selectionGeneration = historyPasswordLoadGeneration;
       await loading;
-      // 返回总览会作废凭据读取；即使用户立刻回到文件页，也不能启动已经取消的连接。
-      if (selectionGeneration === historyPasswordLoadGeneration
-        && document.body.dataset.view === 'workbench' && activeWorkbenchTab === 'files') await connect();
+      if (selectionGeneration === historyPasswordLoadGeneration && document.body.dataset.view === 'files') await connect();
     },
     disconnect: () => disconnect(),
   }, fileManager);
+
   containerPage = new ContainerPage(ui.containerManagerPanel, {
     connect: async (host) => {
       const profile = profiles.find((item) => item.id === host.id);
@@ -2401,12 +2412,11 @@ async function initialize(): Promise<void> {
       const loading = applyProfile(profile);
       const selectionGeneration = historyPasswordLoadGeneration;
       await loading;
-      // 与文件页一致：离开页面会作废凭据读取，不能启动已取消的连接。
-      if (selectionGeneration === historyPasswordLoadGeneration
-        && document.body.dataset.view === 'workbench' && activeWorkbenchTab === 'containers') await connect();
+      if (selectionGeneration === historyPasswordLoadGeneration && document.body.dataset.view === 'containers') await connect();
     },
     disconnect: () => disconnect(),
   }, containerManager);
+
   cronPage = new CronPage(ui.cronManagerPanel, {
     connect: async (host) => {
       const profile = profiles.find((item) => item.id === host.id);
@@ -2418,23 +2428,15 @@ async function initialize(): Promise<void> {
     },
     disconnect: () => disconnect(),
   }, cronManager);
-  workbench = new Workbench(filePage, containerPage, ui.terminalCard, {
-    openFiles: () => undefined,
-    openContainers: () => undefined,
-    openTerminal: () => undefined,
-  });
-  workbench.mount();
-  // 事件日志是终局面板的折叠区块：搬进 terminal-tools 之后，
-  // 避免留在已空的 #workspace-dock 里永远不显示。
+
+  // 事件日志挂在终端卡片内，作为可折叠抽屉
   ui.terminalCard.querySelector('.terminal-pane')!.append(ui.eventLogContainer);
-  // 首次进入工作台时把文件面板搬进槽位并显示；终端面板保持常驻。
-  workbench.show('files');
-  const bench = workbench;
+
   dashboard = new Dashboard({
     files: filePage,
     containers: containerPage,
+    terminal: terminalPage,
     cron: cronPage,
-    openWorkbench: (tab) => openWorkbenchTab(tab),
     snippets: new Snippets(ui.terminalCard, (snippet) => {
       // 片段只进入草稿，尤其多行命令不能通过粘贴意外立即执行。
       const input = document.getElementById('command-editor-input') as HTMLTextAreaElement;
@@ -2445,7 +2447,7 @@ async function initialize(): Promise<void> {
       if (document.getElementById('command-editor')!.hidden) document.getElementById('command-editor-toggle')!.click();
       input.focus();
       toast(bilingual('已填入命令编辑器，确认后再发送。', 'Added to the command editor. Review before sending.'), 'info');
-    }, () => openWorkbenchTab('terminal'), () => dashboard?.showSnippets()),
+    }, () => dashboard?.showTerminal(), () => dashboard?.showSnippets()),
     refresh: async () => {
       profiles = await loadProfiles();
       renderProfiles();
@@ -2455,17 +2457,11 @@ async function initialize(): Promise<void> {
       await applyProfile(host);
       await connect();
     },
-    quickConnect: () => {
-      clearForm();
-      setPanelOpen(true);
-      requestAnimationFrame(() => { fitTerminal(false); ui.host.focus(); });
-    },
     leaveWorkspace: () => {
       disconnect(bilingual('已返回主机总览', 'Returned to host dashboard'));
       clearCredentials();
     },
   });
-  dashboard.attachWorkbench(bench);
   await dashboard.start();
 }
 

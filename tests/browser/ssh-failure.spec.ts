@@ -54,8 +54,8 @@ test('initial SSH connection failure before ready never triggers auto-reconnect 
   await expect(page.locator('#files-connection-state')).not.toHaveText('SSH 已连接');
   await page.waitForTimeout(1400);
   expect(sockets.length).toBe(1);
-  await page.locator('#workbench-tab-terminal').click();
-  await expect(page.locator('body')).toHaveAttribute('data-view', 'workbench');
+  await page.locator('#rail-terminal').click();
+  await expect(page.locator('body')).toHaveAttribute('data-view', 'terminal');
   await expect(page.locator('#event-log')).toContainText('Cloudflare Tunnel WebSocket handshake failed (HTTP 502)');
   // 日志是终局面板内的折叠区块：失败时自动展开，也可用工具栏开关手动控制。
   await expect(page.locator('#event-toggle')).toHaveAttribute('aria-expanded', 'true');

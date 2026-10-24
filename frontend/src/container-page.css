@@ -1,11 +1,85 @@
-/* 容器页：令牌由 .workbench 提供，这里只放布局与度量。 */
+/* 容器页白橙明亮主题变量与度量 */
+body[data-view='containers'] {
+  --surface: var(--home-surface, #ffffff);
+  --surface-2: var(--home-bg, #fafbfd);
+  --surface-3: var(--home-line, #e9ecf1);
+  --panel: var(--home-surface, #ffffff);
+  --border: var(--home-line, #e9ecf1);
+  --border-soft: #eff2f6;
+  --text: var(--home-ink, #111827);
+  --muted: var(--home-muted, #667085);
+  --muted-2: #98a2b3;
+  --accent: var(--home-accent-hover, #d53b0a);
+  --accent-dim: var(--home-accent-soft, #fff0e9);
+  --danger: var(--home-danger, #b42318);
+  --danger-dim: var(--home-accent-soft, #fff0e9);
+  --warning: var(--home-accent-hover, #d53b0a);
+  --sans: var(--home-font);
+  --mono: var(--home-mono);
+}
+
+.containers-page .container-manager {
+  background: var(--home-surface, #ffffff) !important;
+  color: var(--home-ink, #111827) !important;
+  border: 1px solid var(--home-line, #e9ecf1) !important;
+  border-radius: 10px;
+}
+
+.containers-page .container-nav-tabs,
+.containers-page .container-summary,
+.containers-page .container-table th,
+.containers-page .container-statusbar {
+  background: var(--home-bg, #fafbfd) !important;
+  color: var(--home-muted, #667085) !important;
+  border-color: var(--home-line, #e9ecf1) !important;
+}
+
+.containers-page .container-subtab {
+  color: var(--home-muted, #667085) !important;
+}
+
+.containers-page .container-subtab.is-active {
+  background: var(--home-surface, #ffffff) !important;
+  color: var(--home-accent-hover, #d53b0a) !important;
+  border-color: var(--home-line, #e9ecf1) !important;
+}
+
+.containers-page .container-summary-item strong,
+.containers-page .container-table td {
+  color: var(--home-ink, #111827) !important;
+}
+
+.containers-page .container-table td {
+  border-bottom: 1px solid #f1f5f9 !important;
+}
+
+.containers-page .container-table tbody tr:hover {
+  background: var(--home-bg, #fafbfd) !important;
+}
+
+.containers-page .container-action {
+  background: var(--home-surface, #ffffff) !important;
+  color: #334155 !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 5px;
+}
+
+.containers-page .container-action:hover {
+  border-color: var(--home-accent, #f4511e) !important;
+  color: var(--home-accent, #f4511e) !important;
+}
+
+.containers-page .container-action.danger {
+  color: var(--home-danger, #b42318) !important;
+  border-color: #fecdd3 !important;
+}
 
 .containers-page {
   min-width: 0; width: 100%; max-width: 1700px; margin-inline: auto;
   padding: 24px 32px 20px; display: flex; flex-direction: column; gap: 14px;
 }
 .containers-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.containers-heading h1 { margin: 0; font-size: 26px; line-height: 1.25; letter-spacing: -.8px; }
+.containers-heading h1 { margin: 0; font-size: 24px; font-weight: 700; line-height: 1.25; letter-spacing: -.4px; }
 .containers-heading p:last-child { margin: 4px 0 0; color: var(--home-muted); font-size: 13px; }
 .containers-connection { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--home-line); border-radius: 10px; background: var(--home-surface); }
 .containers-host-icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 9px; background: var(--home-accent-soft); color: var(--home-accent-hover); flex-shrink: 0; }
@@ -47,19 +121,18 @@ body[data-view='containers'] .home-account { margin-left: auto; }
 @media (max-width: 600px) {
   .containers-page { padding: 20px 12px; gap: 16px; }
   .containers-heading { align-items: flex-start; }
-  .containers-heading h1 { font-size: 25px; }
-  .containers-heading p:last-child { font-size: 12px; }
-  #dashboard #containers-terminal { min-height: 44px; padding-inline: 10px; font-size: 12px; }
-  .containers-connection { padding: 14px; gap: 12px; }
+  .containers-heading h1 { font-size: 24px; }
+  .containers-heading p:last-child { display: none; }
+  .containers-connection { padding: 12px; gap: 10px; }
   .containers-host-icon { display: none; }
   .containers-host-field { flex-basis: calc(100% - 116px); }
-  #dashboard .containers-host-field select { height: 44px; font-size: 16px; }
-  #containers-connect { min-height: 44px; }
+  #dashboard .containers-host-field select { height: 40px; font-size: 15px; }
+  #containers-connect { min-height: 40px; }
   .containers-connection-meta { align-items: flex-start; text-align: left; font-size: 11px; }
   .containers-connection-meta > span:last-child { max-width: 65%; }
-  .containers-browser-heading { padding: 14px 12px; }
-  .containers-browser-heading > span { font-size: 10px; }
-  .containers-panel-slot { height: min(76dvh, 680px); }
+  /* 移动端给列表足够的高度，解决列表特别矮的问题 */
+  .containers-panel-slot { min-height: 460px; height: clamp(460px, calc(100dvh - 220px), 820px); }
+  .containers-page .container-table-wrap { min-height: 320px; flex: 1 1 auto; }
   .containers-footer { flex-direction: column; gap: 6px; }
   #dashboard .home-rail { gap: 4px; padding-inline: 8px; justify-content: space-between; }
   #dashboard .rail-item { padding-inline: 8px; font-size: 11px; }

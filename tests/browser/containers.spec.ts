@@ -7,8 +7,8 @@ test.describe.configure({ mode: 'serial' });
 async function openContainers(page: import('@playwright/test').Page, id = 'alpha') {
   await page.locator('#rail-overview').click();
   await page.locator('#rail-containers').click();
-  await expect(page.locator('#workbench-title')).toHaveText('容器');
-  await expect(page.locator('#workbench-tab-containers')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#containers-heading')).toHaveText('容器');
+  await expect(page.locator('#rail-containers')).toHaveAttribute('aria-current', 'page');
   await page.locator('#containers-host').selectOption(id);
   await page.locator('#containers-connect').click();
 }
@@ -158,16 +158,15 @@ test('容器日志对话框按行数读取', async ({ page }) => {
   await expect(dialog).toBeHidden();
 });
 
-test('总览标签只剩一个，并新增容器标签', async ({ page }) => {
+test('侧边栏完整导航与总览主机卡片', async ({ page }) => {
   await fileFixture(page);
   await page.locator('#rail-overview').click();
-  // “主机”与“总览”合并，侧边栏不再出现重复入口。
   await expect(page.locator('#rail-hosts')).toHaveCount(0);
   await expect(page.locator('#rail-overview')).toHaveAttribute('aria-current', 'page');
+  await expect(page.locator('#rail-terminal')).toHaveText('终端');
   await expect(page.locator('#rail-files')).toHaveText('文件');
   await expect(page.locator('#rail-containers')).toHaveText('容器');
-  // 总览页仍渲染主机卡片；没有常驻探针，所以不再放长期占位的指标带。
+  await expect(page.locator('#rail-cron')).toHaveText('计划任务');
   await expect(page.locator('.host-card').first()).toBeVisible();
-  await expect(page.locator('.host-card .host-metric')).toHaveCount(0);
   await expect(page.locator('.host-card').first()).toContainText('Tokyo production');
 });

@@ -15,8 +15,7 @@ export class Snippets {
     this.page.hidden = true;
     this.page.setAttribute('aria-labelledby', 'snippets-heading');
     this.page.innerHTML = `<header class="snippet-page-heading"><span class="snippet-symbol" aria-hidden="true">{ }</span>
-      <div><p>YOUR COMMAND LIBRARY</p><h1 id="snippets-heading" tabindex="-1">代码片段</h1>
-      <p>把常用命令留在手边，不必每次从头输入。</p></div>
+      <h1 id="snippets-heading" tabindex="-1">代码片段</h1>
       <button type="button" class="snippet-open-terminal">打开 SSH 终端 ↗</button></header>`;
     this.page.querySelector('.snippet-open-terminal')!.addEventListener('click', openTerminal);
     this.page.append(new SnippetList(this.store, editor).root);

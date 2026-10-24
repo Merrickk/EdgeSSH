@@ -56,7 +56,7 @@ test('主页片段库支持十条默认命令、搜索、新建、多行编辑�
 test('终端浮窗折叠、拖动与键盘复位；填入草稿而不执行，编辑与管理页同步', async ({ page }, testInfo) => {
   const files = await fixture(page);
   await connectFiles(page);
-  await page.locator('#workbench-tab-terminal').click();
+  await page.locator('#rail-terminal').click();
   const panel = page.locator('#snippet-panel');
   const expand = panel.getByRole('button', { name: '展开代码片段' });
   if (await expand.count()) await expand.click();
@@ -147,7 +147,7 @@ test('多行片段保留换行且不直接发送；取消覆盖保留旧草稿�
 test('浮窗在调整尺寸后仍可触达，并适配浅色及减少动态效果', async ({ page }, testInfo) => {
   await fixture(page);
   await connectFiles(page);
-  await page.locator('#workbench-tab-terminal').click();
+  await page.locator('#rail-terminal').click();
   const panel = page.locator('#snippet-panel');
   const initiallyCollapsed = testInfo.project.name === 'mobile';
   if (initiallyCollapsed) await expect(panel.locator('#snippet-panel-body')).toBeHidden();

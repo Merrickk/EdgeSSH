@@ -59,8 +59,8 @@ export class ForwardPage {
     this.root.className = 'forward-page';
     this.root.hidden = true;
     this.root.innerHTML = `
-      <header class="home-section-heading"><div><p class="home-eyebrow">PRIVATE WEB PREVIEW</p>
-        <h1 tabindex="-1">端口转发</h1><p>保存常用规则，通过 SSH 打开服务器本机的网站。</p></div>
+      <header class="home-section-heading">
+        <h1 id="forward-heading" tabindex="-1">端口转发</h1>
         <button class="home-button primary forward-new" type="button" data-new-rule>＋ 新建规则</button></header>
       <div class="forward-toolbar"><div class="forward-switch" role="group" aria-label="转发方式" data-active-mode="trusted">
         <button type="button" data-mode="trusted" aria-pressed="true">标准转发</button>
@@ -88,7 +88,7 @@ export class ForwardPage {
         <a data-preview-link target="_blank" rel="noopener noreferrer" hidden>弹窗被拦截？点击打开网站 ↗</a>
       </section>
       <dialog class="host-dialog forward-rule-dialog" aria-labelledby="forward-rule-title">
-        <form autocomplete="off"><div class="dialog-heading"><div><p class="home-eyebrow">SAVED FORWARD</p><h2 id="forward-rule-title">新建转发规则</h2></div></div>
+        <form autocomplete="off"><div class="dialog-heading"><h2 id="forward-rule-title">新建转发规则</h2></div>
           <p class="dialog-intro">规则会加密保存在云端。网站仅在你点击连接后打开。</p>
           <div class="forward-rule-fields"><label>规则名称<input name="name" maxlength="80" required placeholder="例如：开发服务"></label>
             <label>目标主机<select name="host" required><option value="">请选择主机</option></select></label>

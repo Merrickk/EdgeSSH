@@ -27,7 +27,7 @@ body[data-view='snippets'] { overflow-y: auto; background: var(--home-bg); }
 .snippet-page-heading { display: flex; align-items: center; gap: 18px; margin-bottom: 32px; }
 .snippet-open-terminal { margin-left: auto; white-space: nowrap; }
 .snippet-page-heading > .snippet-symbol { display: grid; place-items: center; width: 64px; height: 64px; background: var(--snip-accent-soft); border-radius: 16px; font-size: 26px; flex-shrink: 0; }
-.snippet-page-heading h1 { font-size: 28px; margin: 4px 0 8px; }
+.snippet-page-heading h1 { font-size: 24px; margin: 0; font-weight: 700; line-height: 1.25; }
 .snippet-page-heading p { margin: 0; color: var(--snip-muted); font-size: 13px; }
 .snippet-page-heading p:first-child { font: 10px var(--mono); letter-spacing: 1.6px; }
 .snippet-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

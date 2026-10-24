@@ -1,0 +1,117 @@
+/* 终端独立页面样式：与总览、文件、容器、计划任务页保持一致的主题与紧凑结构。 */
+
+body[data-view='terminal'] { height: auto; min-height: 100%; overflow-y: auto; background: var(--home-bg); }
+body[data-view='terminal'] {
+  --surface: var(--home-surface);
+  --surface-2: var(--home-bg);
+  --surface-3: var(--home-line);
+  --panel: var(--home-surface);
+  --border: var(--home-line);
+  --border-soft: var(--home-line);
+  --text: var(--home-ink);
+  --muted: var(--home-muted);
+  --muted-2: var(--home-muted);
+  --accent: var(--home-accent-hover);
+  --accent-dim: var(--home-accent-soft);
+  --danger: var(--home-danger);
+  --danger-dim: var(--home-accent-soft);
+  --warning: var(--home-accent-hover);
+  --sans: var(--home-font);
+  --mono: var(--home-mono);
+}
+
+.terminal-page {
+  min-width: 0; width: 100%; max-width: 1700px; margin-inline: auto;
+  padding: 20px 24px 16px; display: flex; flex-direction: column; gap: 12px;
+  flex: 1 1 auto;
+}
+
+.terminal-page-heading {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+
+.terminal-page-heading h1 {
+  margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -.4px; line-height: 1.25; color: var(--home-ink);
+}
+
+.terminal-connection {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--home-line); border-radius: 10px; background: var(--home-surface);
+  flex-wrap: wrap;
+}
+
+.terminal-host-icon {
+  width: 38px; height: 38px; display: grid; place-items: center; border-radius: 9px; background: var(--home-accent-soft); color: var(--home-accent-hover); flex-shrink: 0;
+}
+.terminal-host-icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+
+.terminal-host-field {
+  display: flex; flex-direction: column; gap: 4px; flex: 1 1 260px; max-width: 480px; min-width: 0; color: var(--home-muted); font-size: 12px;
+}
+.terminal-host-field > span { line-height: 1.2; }
+#dashboard .terminal-host-field select { width: 100%; min-width: 0; height: 34px; padding: 0 32px 0 12px; color: var(--home-ink); background: var(--home-bg); border: 1px solid var(--home-line); border-radius: 6px; font: 12px var(--home-mono); }
+#terminal-connect { min-width: 96px; align-self: flex-end; }
+#terminal-custom-toggle { min-width: 120px; align-self: flex-end; font-size: 12px; }
+
+.terminal-connection-meta {
+  margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; font-size: 12px; color: var(--home-muted); text-align: right;
+}
+
+.terminal-state { display: inline-flex; align-items: center; gap: 7px; color: var(--home-muted); font-weight: 600; }
+.terminal-state::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.terminal-state[data-state='connected'] { color: var(--home-success); }
+.terminal-state[data-state='error'] { color: var(--home-danger); }
+.terminal-state[data-state='connecting'] { color: var(--home-accent-hover); }
+
+/* 快速手填连接参数表单 */
+.terminal-quick-form {
+  border: 1px solid var(--home-line); border-radius: 10px; background: var(--home-surface); padding: 14px 18px;
+}
+.terminal-quick-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 14px;
+}
+.terminal-quick-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--home-muted); }
+.terminal-quick-grid :is(input, select, textarea) {
+  height: 32px; padding: 0 8px; border: 1px solid var(--home-line); border-radius: 6px; background: var(--home-bg); color: var(--home-ink); font-size: 12px; font-family: var(--home-mono); box-sizing: border-box;
+}
+.terminal-quick-grid textarea { height: 60px; padding: 6px 8px; resize: vertical; }
+.terminal-quick-grid .quick-tunnel-label {
+  grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 8px; cursor: pointer; color: var(--home-ink);
+}
+.terminal-quick-actions {
+  display: flex; align-items: center; gap: 10px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--home-line);
+}
+
+.terminal-notice {
+  margin: 0; padding: 10px 14px; border-left: 3px solid var(--home-accent); background: var(--home-accent-soft); color: var(--home-ink); font-size: 13px; overflow-wrap: anywhere;
+}
+.terminal-notice.error { color: var(--home-danger); border-color: var(--home-danger); }
+
+.terminal-browser {
+  display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--home-line); border-radius: 10px; overflow: hidden; background: var(--home-surface);
+  flex: 1 1 auto;
+}
+
+.terminal-panel-slot {
+  display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; height: clamp(420px, calc(100dvh - 340px), 920px);
+}
+
+.terminal-panel-slot #terminal-card {
+  width: 100%; height: 100%; border-radius: 0; border: 0;
+}
+
+.terminal-footer {
+  display: flex; justify-content: space-between; gap: 12px; color: var(--home-muted); font-size: 11px;
+}
+
+body[data-view='terminal'] #dashboard .home-search,
+body[data-view='terminal'] #dashboard .header-add { display: none; }
+body[data-view='terminal'] .home-account { margin-left: auto; }
+
+@media (max-width: 760px) {
+  .terminal-page { padding: 14px 12px; gap: 10px; }
+  .terminal-connection { padding: 10px; }
+  .terminal-connection-meta { flex-basis: 100%; flex-direction: row; align-items: center; justify-content: space-between; }
+  .terminal-quick-grid { grid-template-columns: minmax(0, 1fr); }
+  .terminal-panel-slot { height: clamp(360px, calc(100dvh - 300px), 680px); }
+  .terminal-footer { flex-direction: column; gap: 4px; }
+}

@@ -4,9 +4,8 @@ import { connectFiles, fileFixture } from './file-fixture';
 
 test('工作台入口、空状态与移动端布局', async ({ page }, testInfo) => {
   await fileFixture(page, { noHosts: true });
-  // 默认落在文件面板：左上只有中文标题，右上角是三个切换标签。
-  await expect(page.locator('#workbench-title')).toHaveText('文件');
-  await expect(page.locator('#workbench-tab-files')).toHaveAttribute('aria-selected', 'true');
+  // 默认落在文件页面：左上纯中文标题，侧边栏高亮文件。
+  await expect(page.locator('#files-heading')).toHaveText('文件');
   await expect(page.locator('#rail-files')).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('#files-connect')).toBeDisabled();
   await expect(page.locator('#file-upload')).toBeDisabled();
@@ -53,7 +52,7 @@ test('文件管理全屏保留目录、选择和共享连接', async ({ page }, 
   await expect(page.locator('#fullscreen-files')).toBeFocused();
   await expect(page.locator('#exit-fullscreen-files')).toBeHidden();
   await expect(panel).toBeVisible();
-  await expect(page.locator('body')).toHaveAttribute('data-view', 'workbench');
+  await expect(page.locator('body')).toHaveAttribute('data-view', 'files');
   await expect(page.locator('#files-connection-state')).toHaveText('SSH 已连接');
 
   // 全屏前后都是同一个 SSH / SFTP 会话。
@@ -81,13 +80,13 @@ test('连接、目录导航与共享终端会话不重复附着', async ({ page 
   await expect(page.locator('#file-manager-path')).toHaveValue('/root/backups');
   await page.locator('#file-up').click();
   await expect(page.locator('#file-manager-path')).toHaveValue('/root');
-  // 切到终局面板再切回文件：同一会话不重复附着，终端保持连接。
-  await page.locator('#workbench-tab-terminal').click();
-  await expect(page.locator('#workbench-title')).toHaveText('终端');
-  await expect(page.locator('#workbench-panel-terminal')).toBeVisible();
-  await expect(page.locator('#workbench-panel-files')).toBeHidden();
-  await page.locator('#workbench-tab-files').click();
-  await expect(page.locator('#workbench-title')).toHaveText('文件');
+  // 切到终端再切回文件：同一会话不重复附着，终端保持后台连接。
+  await page.locator('#rail-terminal').click();
+  await expect(page.locator('#terminal-page-heading')).toHaveText('终端');
+  await expect(page.locator('.terminal-page')).toBeVisible();
+  await expect(page.locator('.files-page')).toBeHidden();
+  await page.locator('#rail-files').click();
+  await expect(page.locator('#files-heading')).toHaveText('文件');
   await expect(page.locator('.files-page #file-manager-panel')).toBeVisible();
   await expect(page.locator('#file-manager-path')).toHaveValue('/root');
   await expect(page.locator('.files-list [role="tree"]')).toBeVisible();
@@ -259,10 +258,10 @@ test('传输时离开需确认，切换终端不打断传输', async ({ page }) 
   await expect(page.locator('#file-upload')).toBeEnabled();
   await page.locator('#file-upload-input').setInputFiles({ name: 'pending.txt', mimeType: 'text/plain', buffer: Buffer.from('pending') });
   await expect(page.locator('#file-manager-progress')).toBeVisible();
-  // 传输中切到其他面板再切回：进度保留，SFTP 通道没有重连。
-  await page.locator('#workbench-tab-terminal').click();
+  // 传输中切到终端再切回：进度保留，SFTP 通道没有重连。
+  await page.locator('#rail-terminal').click();
   await expect(page.locator('#file-manager-progress')).toBeHidden();
-  await page.locator('#workbench-tab-files').click();
+  await page.locator('#rail-files').click();
   await expect(page.locator('#file-manager-progress')).toBeVisible();
   expect(fixture.sftpSockets).toHaveLength(1);
   // 只有真正断开连接才需要确认。

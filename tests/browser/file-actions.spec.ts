@@ -8,40 +8,33 @@ async function openDockFiles(page: import('@playwright/test').Page) {
   await expect(page.locator('#file-manager-panel')).toBeVisible();
 }
 
-test('工作台三个面板可切换且终局面板常驻', async ({ page }, testInfo) => {
+test('独立页面通过侧边栏平滑切换且终端后台保持连接', async ({ page }, testInfo) => {
   const fixture = await fileFixture(page);
   await connectFiles(page);
-  await expect(page.locator('#workbench-title')).toHaveText('文件');
+  await expect(page.locator('#files-heading')).toHaveText('文件');
 
-  // 标签切换：标题、面板可见性、aria 状态同步更新。
-  await page.locator('#workbench-tab-containers').click();
-  await expect(page.locator('#workbench-title')).toHaveText('容器');
-  await expect(page.locator('#workbench-panel-containers')).toBeVisible();
-  await expect(page.locator('#workbench-panel-files')).toBeHidden();
-  await expect(page.locator('#workbench-tab-containers')).toHaveAttribute('aria-selected', 'true');
+  // 切到容器页面
+  await page.locator('#rail-containers').click();
+  await expect(page.locator('#containers-heading')).toHaveText('容器');
+  await expect(page.locator('.containers-page')).toBeVisible();
+  await expect(page.locator('.files-page')).toBeHidden();
 
-  await page.locator('#workbench-tab-terminal').click();
-  await expect(page.locator('#workbench-title')).toHaveText('终端');
-  await expect(page.locator('#workbench-panel-terminal')).toBeVisible();
-  await expect(page.locator('#workbench-panel-files')).toBeHidden();
-  await expect(page.locator('#workbench-panel-containers')).toBeHidden();
+  // 切到终端页面
+  await page.locator('#rail-terminal').click();
+  await expect(page.locator('#terminal-page-heading')).toHaveText('终端');
+  await expect(page.locator('.terminal-page')).toBeVisible();
+  await expect(page.locator('.containers-page')).toBeHidden();
+  await expect(page.locator('.files-page')).toBeHidden();
 
-  await page.locator('#workbench-tab-files').click();
-  await expect(page.locator('#workbench-panel-files')).toBeVisible();
-  // 三个通道都只有一个：切换面板没有重连，终端保持后台连接。
+  // 切回文件页面
+  await page.locator('#rail-files').click();
+  await expect(page.locator('.files-page')).toBeVisible();
+
+  // 关键断言：三个通道都只有一个实例，页面切换不打断后台连接
   expect(fixture.sshSockets).toHaveLength(1);
   expect(fixture.sftpSockets).toHaveLength(1);
   expect(fixture.containerSockets).toHaveLength(1);
   await expect(page.locator('#files-connection-state')).toHaveText('SSH 已连接');
-
-  // 键盘同样可以切换：方向键在三个标签间循环。
-  await page.locator('#workbench-tab-files').focus();
-  await page.keyboard.press('ArrowRight');
-  await expect(page.locator('#workbench-title')).toHaveText('容器');
-  await page.keyboard.press('End');
-  await expect(page.locator('#workbench-title')).toHaveText('终端');
-  await page.keyboard.press('Home');
-  await expect(page.locator('#workbench-title')).toHaveText('文件');
 });
 
 test('行内操作菜单打开操作面板并复用重命名协议', async ({ page }, testInfo) => {
