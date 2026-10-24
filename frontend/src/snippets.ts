@@ -14,10 +14,9 @@ export class Snippets {
     this.page.className = 'snippet-page snippet-surface';
     this.page.hidden = true;
     this.page.setAttribute('aria-labelledby', 'snippets-heading');
-    this.page.innerHTML = `<header class="snippet-page-heading"><span class="snippet-symbol" aria-hidden="true">{ }</span>
+    this.page.innerHTML = `<header class="snippet-page-heading">
       <h1 id="snippets-heading" tabindex="-1">代码片段</h1>
-      <button type="button" class="snippet-open-terminal">打开 SSH 终端 ↗</button></header>`;
-    this.page.querySelector('.snippet-open-terminal')!.addEventListener('click', openTerminal);
+    </header>`;
     this.page.append(new SnippetList(this.store, editor).root);
     new SnippetPanel(container, this.store, editor, use, openLibrary);
   }

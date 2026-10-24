@@ -6,6 +6,7 @@ import {
   SSH_MSG_CHANNEL_FAILURE,
   SSH_MSG_CHANNEL_OPEN_CONFIRMATION,
   SSH_MSG_CHANNEL_OPEN_FAILURE,
+  SSH_MSG_CHANNEL_REQUEST,
   SSH_MSG_CHANNEL_SUCCESS,
   SSH_MSG_CHANNEL_WINDOW_ADJUST,
   SSH_MSG_DEBUG,
@@ -110,6 +111,7 @@ interface PendingContainerActionChannel {
   stdoutBytes: number;
   stderrBytes: number;
   finalized: boolean;
+  exitStatus: number | null;
 }
 
 interface PendingCronActionChannel {
@@ -127,6 +129,7 @@ interface PendingCronActionChannel {
   stdoutBytes: number;
   stderrBytes: number;
   finalized: boolean;
+  exitStatus: number | null;
 }
 
 interface PendingSystemProbeChannel {
@@ -154,9 +157,9 @@ const PROCESS_KILL_MAX_BUFFER_BYTES = 4 * 1024;
 // Container monitor: the resident `docker ps`/`docker stats` loop and the one-shot
 // action channels (start/stop/restart/rm/rmi/logs) share these caps.
 const CONTAINER_MAX_BUFFER_BYTES = 256 * 1024;
-const CONTAINER_ACTION_MAX_OUTPUT_BYTES = 32 * 1024;
+const CONTAINER_ACTION_MAX_OUTPUT_BYTES = 256 * 1024;
 const CONTAINER_ACTION_COMMAND_MAX_BYTES = 512;
-const CONTAINER_ACTION_TIMEOUT_MS = 60_000;
+const CONTAINER_ACTION_TIMEOUT_MS = 300_000;
 const CONTAINER_ACTION_CHANNEL_OPEN_TIMEOUT_MS = 15_000;
 const SYSTEM_PROBE_TIMEOUT_MS = 10_000;
 const SYSTEM_PROBE_MAX_BUFFER_BYTES = 16 * 1024;
@@ -841,7 +844,8 @@ export class SSHSession {
           await this.sendAuxiliaryChannelClose(channel);
         } else {
           try {
-            await this.sendEncrypted(channel.buildExecRequest(action.command));
+            const execCmd = `export PATH="$PATH:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/snap/bin"; ${action.command}`;
+            await this.sendEncrypted(channel.buildExecRequest(execCmd));
           } catch (error) {
             this.finalizeContainerAction(action, error instanceof Error ? error.message : String(error));
             await this.sendAuxiliaryChannelClose(channel);
@@ -855,7 +859,8 @@ export class SSHSession {
           await this.sendAuxiliaryChannelClose(channel);
         } else {
           try {
-            await this.sendEncrypted(channel.buildExecRequest(action.command));
+            const execCmd = `export PATH="$PATH:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/snap/bin"; ${action.command}`;
+            await this.sendEncrypted(channel.buildExecRequest(execCmd));
           } catch (error) {
             this.finalizeCronAction(action, error instanceof Error ? error.message : String(error));
             await this.sendAuxiliaryChannelClose(channel);
@@ -1009,6 +1014,31 @@ export class SSHSession {
       channel.handleWindowAdjust(payload);
       if (isShell) void this.flushInput();
       else if (channel === this.sftpChannel) this.sftpHandler?.onWindowAdjust();
+      return;
+    }
+    if (type === SSH_MSG_CHANNEL_REQUEST) {
+      if (payload.length >= 9) {
+        const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+        const channelID = view.getUint32(1);
+        const action = this.pendingContainerActionChannels.get(channelID);
+        const cronAction = this.pendingCronActionChannels.get(channelID);
+        const typeLen = view.getUint32(5);
+        if (payload.length >= 9 + typeLen) {
+          const reqType = new TextDecoder().decode(payload.subarray(9, 9 + typeLen));
+          let offset = 9 + typeLen;
+          const wantReply = offset < payload.length ? payload[offset] !== 0 : false;
+          offset += 1;
+          if (reqType === 'exit-status' && payload.length >= offset + 4) {
+            const exitStatus = view.getUint32(offset);
+            if (action) action.exitStatus = exitStatus;
+            if (cronAction) cronAction.exitStatus = exitStatus;
+          }
+          if (wantReply) {
+            const reply = new Uint8Array([SSH_MSG_CHANNEL_SUCCESS, (channelID >> 24) & 0xff, (channelID >> 16) & 0xff, (channelID >> 8) & 0xff, channelID & 0xff]);
+            await this.sendEncrypted(reply);
+          }
+        }
+      }
       return;
     }
     if (type === SSH_MSG_CHANNEL_EOF) {
@@ -1328,6 +1358,7 @@ export class SSHSession {
       stdoutBytes: 0,
       stderrBytes: 0,
       finalized: false,
+      exitStatus: null,
     };
     this.channels.set(channelID, channel);
     this.pendingContainerActionChannels.set(channelID, pending);
@@ -1350,9 +1381,20 @@ export class SSHSession {
     const text = (isStderr ? action.stderrDecoder : action.stdoutDecoder).decode(slice, { stream: true });
     if (isStderr) { action.stderr += text; action.stderrBytes += slice.byteLength; }
     else { action.stdout += text; action.stdoutBytes += slice.byteLength; }
-    // Commands that produce no stdout and exit 0 still need a completion signal;
-    // CHANNEL_CLOSE drives finalize for every action.
-    if (action.timeout === null && action.openConfirmed) {
+
+    // 实时向客户端推送流式输出，让用户在弹窗中立即看到终端反馈，不再盲等
+    if (text) {
+      this.sendContainerJson({
+        type: 'container_action_stream',
+        requestId: action.requestId,
+        data: text,
+        isStderr,
+      });
+    }
+
+    // 只要远端持续产生输出（如 docker pull 或 build 下载中），就重置超时定时器
+    if (action.openConfirmed) {
+      if (action.timeout) clearTimeout(action.timeout);
       action.timeout = setTimeout(() => this.expirePendingContainerAction(action), CONTAINER_ACTION_TIMEOUT_MS);
     }
   }
@@ -1370,16 +1412,16 @@ export class SSHSession {
     if (action.timeout) { clearTimeout(action.timeout); action.timeout = null; }
     this.clearPendingContainerAction(action.channel);
     this.pendingContainerActionChannels.delete(action.channelID);
-    const stdout = action.stdoutDecoder.decode();
-    const stderr = action.stderrDecoder.decode();
-    const exitStatus = error ? null : 0;
+    const stdout = (action.stdout + action.stdoutDecoder.decode()).slice(0, CONTAINER_ACTION_MAX_OUTPUT_BYTES);
+    const stderr = (error ? `${error}\n` : '') + (action.stderr + action.stderrDecoder.decode()).slice(0, CONTAINER_ACTION_MAX_OUTPUT_BYTES);
+    const exitStatus = error ? (action.exitStatus ?? 1) : (action.exitStatus ?? 0);
     this.sendContainerJson({
       type: 'container_action_result',
       requestId: action.requestId,
       ok: !error && exitStatus === 0,
       exitStatus,
-      stdout: stdout.slice(0, CONTAINER_ACTION_MAX_OUTPUT_BYTES),
-      stderr: (error ?? stderr).slice(0, CONTAINER_ACTION_MAX_OUTPUT_BYTES),
+      stdout,
+      stderr,
     });
   }
 
@@ -1541,6 +1583,7 @@ export class SSHSession {
       stdoutBytes: 0,
       stderrBytes: 0,
       finalized: false,
+      exitStatus: null,
     };
     this.channels.set(channelID, channel);
     this.pendingCronActionChannels.set(channelID, pending);
@@ -1563,7 +1606,19 @@ export class SSHSession {
     const text = (isStderr ? action.stderrDecoder : action.stdoutDecoder).decode(slice, { stream: true });
     if (isStderr) { action.stderr += text; action.stderrBytes += slice.byteLength; }
     else { action.stdout += text; action.stdoutBytes += slice.byteLength; }
-    if (action.timeout === null && action.openConfirmed) {
+
+    // 实时流式推送任务执行日志
+    if (text) {
+      this.sendCronJson({
+        type: 'cron_action_stream',
+        requestId: action.requestId,
+        data: text,
+        isStderr,
+      });
+    }
+
+    if (action.openConfirmed) {
+      if (action.timeout) clearTimeout(action.timeout);
       action.timeout = setTimeout(() => this.expirePendingCronAction(action), CONTAINER_ACTION_TIMEOUT_MS);
     }
   }
@@ -1581,16 +1636,16 @@ export class SSHSession {
     if (action.timeout) { clearTimeout(action.timeout); action.timeout = null; }
     this.clearPendingCronAction(action.channel);
     this.pendingCronActionChannels.delete(action.channelID);
-    const stdout = action.stdoutDecoder.decode();
-    const stderr = action.stderrDecoder.decode();
-    const exitStatus = error ? null : 0;
+    const stdout = (action.stdout + action.stdoutDecoder.decode()).slice(0, CONTAINER_ACTION_MAX_OUTPUT_BYTES);
+    const stderr = (error ? `${error}\n` : '') + (action.stderr + action.stderrDecoder.decode()).slice(0, CONTAINER_ACTION_MAX_OUTPUT_BYTES);
+    const exitStatus = error ? (action.exitStatus ?? 1) : (action.exitStatus ?? 0);
     this.sendCronJson({
       type: 'cron_action_result',
       requestId: action.requestId,
       ok: !error && exitStatus === 0,
       exitStatus,
-      stdout: stdout.slice(0, CONTAINER_ACTION_MAX_OUTPUT_BYTES),
-      stderr: (error ?? stderr).slice(0, CONTAINER_ACTION_MAX_OUTPUT_BYTES),
+      stdout,
+      stderr,
     });
   }
 

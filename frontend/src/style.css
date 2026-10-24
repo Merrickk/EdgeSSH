@@ -2994,6 +2994,27 @@ body[data-view='files'] .file-dialog::backdrop { background: rgba(17, 24, 39, 0.
 .container-pull-field input:focus { border-color: var(--accent); outline: none; }
 .container-pull-help { margin: 0; font-size: 11px; color: var(--muted); line-height: 1.5; }
 
+.container-pull-dialog #container-pull-confirm {
+  background: var(--home-accent, #f4511e) !important;
+  border-color: var(--home-accent, #f4511e) !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+.container-pull-dialog #container-pull-confirm:hover {
+  background: var(--home-accent-hover, #d53b0a) !important;
+}
+.container-pull-dialog #container-pull-dismiss {
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #111827 !important;
+  font-weight: 500 !important;
+}
+.container-pull-dialog #container-pull-dismiss:hover {
+  background: #f8fafc !important;
+  color: #000000 !important;
+  border-color: #94a3b8 !important;
+}
+
 /* ── 路径面包屑导航 (参考 1Panel) ─────────────────────────────────── */
 .file-path-container {
   display: flex;

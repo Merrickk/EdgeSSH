@@ -58,17 +58,17 @@ body[data-view='dashboard'] { overflow-y: auto; background: var(--home-bg); }
 #dashboard .rail-item:hover { background: var(--home-bg); color: var(--home-accent); }
 .rail-security { margin-top: auto; padding: 24px 0 4px; text-align: center; color: var(--home-muted); font-size: 10px; }
 .rail-security svg { display: block; margin: 0 auto 8px; color: var(--home-success); }
-.home-content { width: 100%; max-width: 1450px; margin-inline: auto; padding: 36px 32px 20px; min-width: 0; }
-.home-main-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); min-height: 490px; }
-.hosts-pane { padding-right: 28px; min-width: 0; }
-.home-section-heading { display: flex; gap: 16px; align-items: center; justify-content: space-between; margin-bottom: 23px; }
+.home-content { width: 100%; max-width: 1700px; margin-inline: auto; padding: 16px 28px 20px; min-width: 0; }
+.home-main-grid { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 490px; }
+.hosts-pane { padding-right: 0; min-width: 0; }
+.home-section-heading { display: flex; gap: 16px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .home-eyebrow { font-family: var(--home-mono); font-size: 10px; letter-spacing: 1.6px; font-weight: 500; margin: 0 0 10px; color: var(--home-muted); }
 .home-section-heading h1 { margin: 0; font-size: 24px; line-height: 1.25; letter-spacing: -.5px; font-weight: 700; }
 .home-section-heading p:last-child { margin: 8px 0 0; color: var(--home-muted); font-size: 13px; }
 .host-filters { display: flex; gap: 16px; flex-wrap: wrap; border-bottom: 1px solid var(--home-line); margin-bottom: 12px; }
 #dashboard .host-filters button { padding: 12px 2px; color: var(--home-muted); background: none; font-size: 12px; white-space: nowrap; border-bottom: 3px solid transparent; }
 #dashboard .host-filters button.active { color: var(--home-ink); border-color: var(--home-accent); }
-.host-list { min-height: 282px; max-height: 480px; overflow-y: auto; scrollbar-width: thin; }
+.host-list { min-height: 282px; max-height: calc(100dvh - 320px); overflow-y: auto; scrollbar-width: thin; }
 .host-group-heading { font-size: 12px; font-weight: 650; margin: 18px 0 9px; color: var(--home-muted); }
 /* 主机卡片：单行排布图标、名称、位置与操作；没有探据所以不放指标带。 */
 .host-card { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; border: 1px solid var(--home-line); border-radius: 10px; margin-bottom: 12px; padding: 13px 16px; background: var(--home-surface); transition: border-color 140ms ease, box-shadow 140ms ease; }

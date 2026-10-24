@@ -491,6 +491,15 @@ export class ContainerManager {
       });
       return;
     }
+    if (type === 'container_action_stream') {
+      const data = typeof message.data === 'string' ? message.data : '';
+      if (data && this.elements.logText) {
+        this.elements.logText.textContent += data;
+        const body = this.elements.logText.closest('.container-log-body') as HTMLElement | null;
+        if (body) body.scrollTop = body.scrollHeight;
+      }
+      return;
+    }
     if (type === 'container_action_result') {
       this.handleActionResult(message);
       return;
@@ -539,8 +548,26 @@ export class ContainerManager {
     if (pending.action === 'logs' || pending.action === 'upgrade' || pending.action === 'pull') {
       // 日志、升级、拉取等把输出渲染到日志对话框。
       if (this.logTarget === pending.target || pending.action === 'upgrade' || pending.action === 'pull') {
-        this.showLog(pending.action === 'upgrade' ? '容器升级输出' : pending.target, ok ? stdout : `${stdout}\n${stderr}`);
+        const title = pending.action === 'upgrade' ? '容器升级输出' : pending.target;
+        this.elements.logTitle.textContent = title;
+        const currentText = this.elements.logText.textContent || '';
+        const exitStatus = typeof message.exitStatus === 'number' ? message.exitStatus : (ok ? 0 : 1);
+        const statusSummary = `\n────────────────────────────────────────\n[${ok ? '✓ 执行完成 (Success)' : '✗ 执行失败 (Failed: exitStatus=' + exitStatus + ')'}]\n`;
+        const contentToAdd = ok ? (stdout || '(无更多输出)') : `${stdout}\n${stderr}`.trim();
+        if (currentText && (currentText.includes(stdout) && stdout.length > 20)) {
+          this.elements.logText.textContent = `${currentText}${statusSummary}`;
+        } else {
+          this.elements.logText.textContent = `${currentText}\n${contentToAdd}${statusSummary}`;
+        }
+        const body = this.elements.logText.closest('.container-log-body') as HTMLElement | null;
+        if (body) body.scrollTop = body.scrollHeight;
       }
+      const label = pending.action === 'upgrade' ? '容器升级' : (pending.action === 'pull' ? '镜像拉取' : '日志');
+      this.options.onToast?.(
+        ok ? `${label}完成` : `${label}失败：${stderr || stdout || '命令执行返回错误'}`,
+        ok ? `${label} finished` : `${label} failed: ${stderr || stdout || 'error'}`,
+        ok ? 'info' : 'error',
+      );
       return;
     }
     const label = containerActionLabel(pending.action, this.localize);

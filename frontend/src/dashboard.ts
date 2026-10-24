@@ -82,16 +82,10 @@ export class Dashboard {
               <div id="host-list" class="host-list" aria-live="polite"><p class="home-empty">正在从云端加载主机…</p></div>
               <div class="host-list-footer"><span id="host-total">0 台主机</span><button class="home-text-button" id="refresh-hosts">刷新列表 ↻</button></div>
             </section>
-            <section class="globe-pane" aria-labelledby="globe-heading">
-              <div class="globe-heading"><h2 id="globe-heading">散布全球，<span>就在手边。</span></h2></div>
-              <div class="host-globe" id="host-globe" aria-label="主机地理分布，可拖动旋转；也可使用主机列表连接"></div>
-              <div class="globe-meta"><span id="region-count">0 个地区</span><button id="pause-globe" class="home-text-button" aria-pressed="false">暂停旋转</button></div>
-              <p class="globe-caption">城市级近似定位 · 位置不代表在线状态</p>
-            </section>
           </div>
           <section class="home-bottom" aria-label="存储与连接信息">
             <div class="storage-note">${icon('shield')}<div><strong>凭据留在你的加密保险箱</strong><p>管理员认证 · D1 加密存储 · 密钥仅在 Worker</p></div><span class="storage-tag">AES-256-GCM</span></div>
-            <button class="quick-card" id="bottom-quick">${icon('terminal')}<span><strong>临时连接</strong><small>打开完整 SSH 工作台</small></span><span>↗</span></button>
+            <button class="quick-card" id="bottom-quick">${icon('terminal')}<span><strong>临时连接</strong><small>打开终端临时连接表单</small></span><span>↗</span></button>
           </section>
           <footer class="home-footer"><span>EdgeSSH / Private workspace</span><span>首次保存时查询公网 IP 位置，失败时仍可连接。</span><a href="https://mappojs.com/" target="_blank" rel="noopener noreferrer">地图数据与灵感来自 Mappo.js</a></footer>
         </main>
@@ -161,16 +155,22 @@ export class Dashboard {
     this.get('#rail-cron').addEventListener('click', () => this.showCron());
     this.get('#rail-snippets').addEventListener('click', () => this.showSnippets());
     this.get('#rail-forward').addEventListener('click', () => this.showForwarding());
-    this.get('#bottom-quick').addEventListener('click', () => this.showTerminal());
+    this.get('#bottom-quick').addEventListener('click', () => {
+      this.showTerminal();
+      this.actions.terminal.openCustomForm();
+    });
     this.field('authMethod').addEventListener('change', () => this.updateCredentialFields());
     this.field('cfTunnel').addEventListener('change', () => this.updateCredentialFields());
     this.form.addEventListener('submit', (event) => { event.preventDefault(); void this.save(); });
-    this.get('#pause-globe').addEventListener('click', () => {
-      this.paused = !this.paused;
-      this.get('#pause-globe').setAttribute('aria-pressed', String(this.paused));
-      this.get('#pause-globe').textContent = this.paused ? '继续旋转' : '暂停旋转';
-      this.globe?.setActive(!this.paused);
-    });
+    const pauseBtn = this.root.querySelector('#pause-globe');
+    if (pauseBtn) {
+      pauseBtn.addEventListener('click', () => {
+        this.paused = !this.paused;
+        pauseBtn.setAttribute('aria-pressed', String(this.paused));
+        pauseBtn.textContent = this.paused ? '继续旋转' : '暂停旋转';
+        this.globe?.setActive(!this.paused);
+      });
+    }
     document.addEventListener('keydown', (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && this.isHome && !this.dialog.open) {
         event.preventDefault(); this.get<HTMLInputElement>('#host-search').focus();
@@ -220,12 +220,7 @@ export class Dashboard {
       this.signedOut();
       this.notice(error instanceof Error ? error.message : '无法验证管理员身份。');
     }
-    try {
-      const { HostGlobe } = await import('./globe');
-      this.globe = new HostGlobe(this.get('#host-globe'), (host) => void this.connectHost(host));
-      this.globe.setHosts(this.hosts);
-      this.globe.setActive(this.isHome && !this.paused);
-    } catch { this.get('#host-globe').textContent = '地图暂不可用，请从主机列表连接。'; }
+    // 地图已被移除，不再动态加载 HostGlobe
   }
 
   setHosts(hosts: CloudHost[]): void {
@@ -241,9 +236,14 @@ export class Dashboard {
     this.forwarding.setHosts(hosts);
     if (this.group && !hosts.some((host) => host.group === this.group)) this.group = '';
     this.renderFilters(); this.renderList();
-    this.globe?.setHosts(hosts);
-    this.get('#region-count').textContent = `${new Set(hosts.map((host) => host.location?.countryCode).filter(Boolean)).size} 个国家 / 地区`;
-    this.get('#host-total').textContent = `${hosts.length} 台主机 · ${hosts.filter((host) => !host.location).length} 台位置未知`;
+    const regionCount = this.root.querySelector('#region-count');
+    if (regionCount) {
+      regionCount.textContent = `${new Set(hosts.map((host) => host.location?.countryCode).filter(Boolean)).size} 个国家 / 地区`;
+    }
+    const hostTotal = this.root.querySelector('#host-total');
+    if (hostTotal) {
+      hostTotal.textContent = `${hosts.length} 台主机 · ${hosts.filter((host) => !host.location).length} 台位置未知`;
+    }
   }
 
   async refresh(): Promise<void> {

@@ -46,14 +46,14 @@ export class TerminalPage {
           <select id="terminal-host" aria-describedby="terminal-host-hint"><option value="">请选择主机</option></select>
         </label>
         <button id="terminal-connect" class="home-button primary" type="button" disabled>连接主机</button>
-        <button id="terminal-custom-toggle" class="home-button" type="button">快速填写参数 ▾</button>
+        <button id="terminal-custom-toggle" class="home-button" type="button">临时连接 ▾</button>
         <div class="terminal-connection-meta">
           <span id="terminal-connection-state" class="terminal-state" data-state="idle" role="status">未连接</span>
-          <span id="terminal-host-hint">选择保存的主机或快速自定义参数</span>
+          <span id="terminal-host-hint">选择保存的主机或使用临时连接</span>
         </div>
       </section>
 
-      <!-- 快速填写参数展开区 -->
+      <!-- 临时连接展开区 -->
       <form id="terminal-quick-form" class="terminal-quick-form" autocomplete="off" hidden>
         <div class="terminal-quick-grid">
           <label><span>主机地址 *</span><input name="host" placeholder="例如 192.0.2.1 或 example.com" required /></label>
@@ -158,10 +158,14 @@ export class TerminalPage {
     notice.hidden = !message;
   }
 
+  openCustomForm(): void {
+    this.toggleCustomForm(true);
+  }
+
   private toggleCustomForm(expand?: boolean): void {
     const toExpand = expand !== undefined ? expand : this.customForm.hidden;
     this.customForm.hidden = !toExpand;
-    this.customToggle.textContent = toExpand ? '收起自定义参数 ▴' : '快速填写参数 ▾';
+    this.customToggle.textContent = toExpand ? '收起表单 ▴' : '临时连接 ▾';
     if (toExpand) {
       (this.customForm.elements.namedItem('host') as HTMLElement)?.focus();
     }
@@ -186,7 +190,7 @@ export class TerminalPage {
     badge.dataset.state = this.state;
     this.get('#terminal-host-hint').textContent = active
       ? '终端正在运行 · 切换主机前请先断开'
-      : '选择保存的主机或快速填写参数';
+      : '选择保存的主机或使用临时连接';
   }
 
   private async toggleConnection(): Promise<void> {

@@ -1,9 +1,70 @@
-/* 文件页令牌：预览 / 属性 / 编辑器对话框被移到 body 末尾，
-   脱离 .files-page 后仍要沿用白橙主题，令牌由 .workbench 提供。 */
+/* 文件页白橙明亮主题变量与度量 */
+body[data-view='files'] { height: auto; min-height: 100%; overflow-y: auto; background: var(--home-bg, #fafbfd); }
+body[data-view='files'] {
+  --surface: var(--home-surface, #ffffff);
+  --surface-2: var(--home-bg, #fafbfd);
+  --surface-3: var(--home-line, #e9ecf1);
+  --panel: var(--home-surface, #ffffff);
+  --border: var(--home-line, #e9ecf1);
+  --border-soft: #eff2f6;
+  --text: var(--home-ink, #111827);
+  --muted: var(--home-muted, #667085);
+  --muted-2: #98a2b3;
+  --accent: var(--home-accent-hover, #d53b0a);
+  --accent-dim: var(--home-accent-soft, #fff0e9);
+  --danger: var(--home-danger, #b42318);
+  --danger-dim: var(--home-accent-soft, #fff0e9);
+  --warning: var(--home-accent-hover, #d53b0a);
+  --sans: var(--home-font);
+  --mono: var(--home-mono);
+}
+
+.files-page .file-manager {
+  background: var(--home-surface, #ffffff) !important;
+  color: var(--home-ink, #111827) !important;
+  border-color: var(--home-line, #e9ecf1) !important;
+}
+
+.files-page .file-toolbar,
+.files-page .file-statusbar {
+  background: var(--home-surface, #ffffff) !important;
+  color: var(--home-ink, #111827) !important;
+  border-color: var(--home-line, #e9ecf1) !important;
+}
+
+.files-page .file-tree {
+  background: var(--home-bg, #fafbfd) !important;
+  border-right-color: var(--home-line, #e9ecf1) !important;
+}
+
+.files-page .file-tree-header {
+  background: var(--home-bg, #fafbfd) !important;
+  color: var(--home-muted, #667085) !important;
+  border-bottom-color: var(--home-line, #e9ecf1) !important;
+}
+
+.files-page .file-tree-row {
+  color: var(--home-ink, #111827) !important;
+}
+
+.files-page .file-tree-row:hover {
+  background: #f1f5f9 !important;
+}
+
+.files-page .file-table th {
+  background: var(--home-bg, #fafbfd) !important;
+  color: var(--home-muted, #667085) !important;
+  border-bottom: 1px solid var(--home-line, #e9ecf1) !important;
+}
+
+.files-page .file-table td {
+  color: var(--home-ink, #111827) !important;
+  border-bottom: 1px solid #f1f5f9 !important;
+}
 
 .files-page {
   min-width: 0; width: 100%; max-width: 1700px; margin-inline: auto;
-  padding: 24px 32px 20px; display: flex; flex-direction: column; gap: 14px;
+  padding: 14px 28px 16px; display: flex; flex-direction: column; gap: 12px;
 }
 .files-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .files-heading h1 { margin: 0; font-size: 24px; font-weight: 700; line-height: 1.25; letter-spacing: -.4px; }

@@ -89,7 +89,7 @@ test('终端浮窗折叠、拖动与键盘复位；填入草稿而不执行，�
   await page.getByRole('button', { name: '保存片段', exact: true }).click();
   await panel.getByRole('button', { name: '管理代码片段', exact: true }).click();
   await expect(page.locator('#snippets-page').getByRole('heading', { name: '磁盘概况', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '打开 SSH 终端 ↗', exact: true }).click();
+  await page.locator('#rail-terminal').click();
   expect(files.calls.filter((call) => call.type === 'connect')).toHaveLength(1);
   await expect(panel).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -129,7 +129,7 @@ test('多行片段保留换行且不直接发送；取消覆盖保留旧草稿�
   await page.getByRole('dialog').getByLabel('名称').fill('多行脚本');
   await page.getByRole('dialog').getByLabel('命令', { exact: true }).fill('echo a\n# 注释\necho b');
   await page.getByRole('button', { name: '保存片段', exact: true }).click();
-  await page.getByRole('button', { name: '打开 SSH 终端 ↗', exact: true }).click();
+  await page.locator('#rail-terminal').click();
   const panel = page.locator('#snippet-panel');
   if (await panel.getByRole('button', { name: '展开代码片段' }).count()) await panel.getByRole('button', { name: '展开代码片段' }).click();
   await panel.getByRole('button', { name: '使用 多行脚本', exact: true }).click();

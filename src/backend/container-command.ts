@@ -225,7 +225,7 @@ export function buildContainerActionCommand(
     return 'docker image prune -f';
   }
   if (action === 'upgrade') {
-    if (typeof target !== 'string' || target.length === 0 || target.length > 1024) return null;
+    if (typeof target !== 'string' || target.length === 0 || target.length > 2048) return null;
     if (!isValidUpgradeCommand(target)) return null;
     return target;
   }
@@ -251,12 +251,12 @@ export function buildContainerActionCommand(
  */
 function isValidUpgradeCommand(cmd: string): boolean {
   const normalized = cmd.trim();
-  if (normalized.length === 0) return false;
-  // 禁止危险指令与字符
+  if (normalized.length === 0 || normalized.length > 2048) return false;
+  // 禁止破坏根系统目录的危险命令
   if (/rm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+\/($|\s)/.test(normalized)) return false;
-  if (/[:`$]\(|\b(mkfs|dd\s+if=|fdisk|chmod\s+-[a-zA-Z]*R\s+777\s+\/)\b/.test(normalized)) return false;
+  if (/\b(mkfs|dd\s+if=|fdisk|chmod\s+-[a-zA-Z]*R\s+777\s+\/)\b/.test(normalized)) return false;
   // 必须是与 docker 或 compose 或 git 升级相关的命令
-  if (!/(docker|compose|git\s+pull)\b/.test(normalized)) return false;
+  if (!/(docker|compose|git)\b/.test(normalized)) return false;
   return true;
 }
 

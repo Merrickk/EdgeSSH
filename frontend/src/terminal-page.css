@@ -22,7 +22,7 @@ body[data-view='terminal'] {
 
 .terminal-page {
   min-width: 0; width: 100%; max-width: 1700px; margin-inline: auto;
-  padding: 20px 24px 16px; display: flex; flex-direction: column; gap: 12px;
+  padding: 14px 28px 16px; display: flex; flex-direction: column; gap: 12px;
   flex: 1 1 auto;
 }
 

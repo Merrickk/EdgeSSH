@@ -258,6 +258,16 @@ export class CronManager {
       return;
     }
 
+    if (value.type === 'cron_action_stream') {
+      const data = typeof value.data === 'string' ? value.data : '';
+      if (data && this.elements.runText) {
+        this.elements.runText.textContent += data;
+        const body = this.elements.runText.closest('.cron-run-body') as HTMLElement | null;
+        if (body) body.scrollTop = body.scrollHeight;
+      }
+      return;
+    }
+
     if (value.type === 'cron_action_result') {
       const requestId = typeof value.requestId === 'string' ? value.requestId : '';
       const pending = this.pendingActions.get(requestId);
