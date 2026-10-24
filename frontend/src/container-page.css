@@ -1,4 +1,5 @@
 /* 容器页白橙明亮主题变量与度量 */
+body[data-view='containers'] { height: auto; min-height: 100%; overflow-y: auto; background: var(--home-bg, #fafbfd); }
 body[data-view='containers'] {
   --surface: var(--home-surface, #ffffff);
   --surface-2: var(--home-bg, #fafbfd);
