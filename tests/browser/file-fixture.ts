@@ -1,4 +1,13 @@
 import type { Page, WebSocketRoute } from '@playwright/test';
+
+export interface FileFixtureOptions {
+  firstSeen?: boolean;
+  credentialError?: boolean;
+  noHosts?: boolean;
+  holdUpload?: boolean;
+  /** 推迟到调用方注册完自己的 /api 路由后再 navigate()。 */
+  skipNavigate?: boolean;
+}
 import { parseContainerFrame } from '../../src/backend/container-command.ts';
 
 const fingerprint = `SHA256:${'A'.repeat(43)}`;
@@ -13,7 +22,7 @@ const entry = (name: string, type = 'file', size = 12) => ({
 });
 
 // 只在测试浏览器内模拟 API/协议，不访问真实主机、不增加生产认证绕过。
-export async function fileFixture(page: Page, options: { firstSeen?: boolean; credentialError?: boolean; noHosts?: boolean; holdUpload?: boolean } = {}) {
+export async function fileFixture(page: Page, options: FileFixtureOptions = {}) {
   const hosts = options.noHosts ? [] : [host('alpha', 'Tokyo production', '192.0.2.10'), host('beta', 'Singapore backup', '192.0.2.20')];
   const directories = new Map([
     ['/', [entry('root', 'directory')]],
@@ -37,7 +46,6 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
         : { json: { password: 'test-only-password' } });
     }
     if (path === '/api/hosts') return route.fulfill({ json: { hosts } });
-    if (path === '/api/snippets') return route.fulfill({ json: { snippets: [] } });
     return route.fulfill({ json: { host: hosts.find((item) => path.includes(item.id)) ?? hosts[0] } });
   });
   await page.routeWebSocket('**/api/ssh?*', (ws) => {
@@ -139,9 +147,20 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
       }
     });
   });
-  await page.goto('/');
-  await page.locator('#rail-files').click();
-  return { hosts, calls, sshSockets, sftpSockets, uploaded, directories, containerSockets, containerCalls };
+  // 默认在这里导航。若调用方需要先注册自己的 /api 路由（例如覆盖片段列表），
+  // 传 skipNavigate: true，注册完再调用返回的 navigate()——Playwright 按注册
+  // 顺序匹配路由，先注册者优先，晚注册的覆盖规则永远排在本函数之后。
+  if (!options.skipNavigate) {
+    await page.goto('/');
+    await page.locator('#rail-files').click();
+  }
+  return {
+    hosts, calls, sshSockets, sftpSockets, uploaded, directories, containerSockets, containerCalls,
+    async navigate() {
+      await page.goto('/');
+      await page.locator('#rail-files').click();
+    },
+  };
 }
 
 export async function connectFiles(page: Page, id = 'alpha') {

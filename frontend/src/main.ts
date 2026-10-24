@@ -7,6 +7,7 @@ import { listHosts, hostCredentials, saveHost, removeHost, updateHostSystem, typ
 import { Dashboard } from './dashboard';
 import { FilePage } from './file-page';
 import { ContainerPage } from './container-page';
+import { Workbench, type WorkbenchTab } from './workbench';
 import { Snippets } from './snippets';
 import { resolveConnectionControl, resolveConnectionPanel } from './ui-state';
 import { classifyHostKey, SSH_FINGERPRINT_RE, type HostKeyPrompt } from './host-key';
@@ -293,9 +294,6 @@ const ui = {
   resourceNetworkRateDown: element<HTMLElement>('resource-network-rate-down'),
   resourceNetworkSparkline: element<HTMLCanvasElement>('resource-network-sparkline'),
   terminalCard: element<HTMLElement>('terminal-card'),
-  dockResize: element<HTMLElement>('dock-resize'),
-  dockMaximize: element<HTMLButtonElement>('dock-maximize'),
-  workspaceDock: element<HTMLElement>('workspace-dock'),
   fileTreeToggle: element<HTMLButtonElement>('file-tree-toggle'),
   fileTreeScrim: element<HTMLButtonElement>('file-tree-scrim'),
   filePreviewDialog: element<HTMLDialogElement>('file-preview-dialog'),
@@ -310,19 +308,15 @@ const ui = {
   clearTerminal: element<HTMLButtonElement>('clear-terminal'),
   fullscreenTerminal: element<HTMLButtonElement>('fullscreen-terminal'),
   eventMessage: element<HTMLElement>('event-message'),
-  fileManagerTab: element<HTMLButtonElement>('file-manager-tab'),
   fileManagerPanel: element<HTMLElement>('file-manager-panel'),
   fullscreenFiles: element<HTMLButtonElement>('fullscreen-files'),
   exitFullscreenFiles: element<HTMLButtonElement>('exit-fullscreen-files'),
   fileTree: element<HTMLElement>('file-tree'),
-  processManagerTab: element<HTMLButtonElement>('process-manager-tab'),
   processManagerPanel: element<HTMLElement>('process-manager-panel'),
-  containerManagerTab: element<HTMLButtonElement>('container-manager-tab'),
   containerManagerPanel: element<HTMLElement>('container-manager-panel'),
   containerLogDialog: element<HTMLDialogElement>('container-log-dialog'),
   containerConfirmDialog: element<HTMLDialogElement>('container-confirm-dialog'),
   eventToggle: element<HTMLButtonElement>('event-toggle'),
-  dockCollapse: element<HTMLButtonElement>('dock-collapse'),
   eventLogContainer: element<HTMLElement>('event-log-container'),
   eventLogClear: element<HTMLButtonElement>('event-log-clear'),
   eventLogClose: element<HTMLButtonElement>('event-log-close'),
@@ -405,6 +399,16 @@ let profiles: SavedProfile[] = [];
 let dashboard: Dashboard | undefined;
 let filePage: FilePage | undefined;
 let containerPage: ContainerPage | undefined;
+let workbench: Workbench | undefined;
+/** 当前工作台面板；终端常驻，切换面板不打断 SSH。 */
+let activeWorkbenchTab: WorkbenchTab = 'files';
+
+/** 从任意入口切到工作台指定面板（总览状态 + 面板显示一起切）。 */
+function openWorkbenchTab(tab: WorkbenchTab): void {
+  activeWorkbenchTab = tab;
+  workbench?.show(tab);
+  dashboard?.enterWorkbench(tab);
+}
 let hostKeys: Record<string, string> = {};
 let socket: WebSocket | null = null;
 let connectionState: ConnectionState = 'idle';
@@ -1128,7 +1132,9 @@ function showFormError(message: string, alternate?: string): void {
   currentFormError = messageTranslation(message, alternate);
   ui.formError.textContent = localize(currentFormError);
   ui.formError.hidden = false;
-  if (document.body.dataset.view === 'files') filePage?.setMessage(localize(currentFormError), true);
+  if (document.body.dataset.view === 'workbench' && activeWorkbenchTab === 'files') {
+    filePage?.setMessage(localize(currentFormError), true);
+  }
 }
 
 function toast(message: string, kind: 'info' | 'error' = 'info'): void {
@@ -1301,9 +1307,8 @@ function markReady(message = bilingual('交互式 Shell 已就绪', 'Interactive
   invalidateHistoryPasswordLoad();
   setState('connected');
   setPanelOpen(false);
-  if (activeWorkspaceTab === 'log') {
-    setWorkspaceTab(null);
-  }
+  // 连接成功后自动收起事件日志，把高度还给终端。
+  setEventLogOpen(false);
   if (!sshReconnectManager && socket && reconnectParams) {
     sshReconnectManager = new WebSocketReconnectManager({
       id: 'SSH',
@@ -1355,75 +1360,7 @@ function sendHostKeyDecision(accept: boolean): void {
     : bilingual('主机密钥已拒绝。', 'Host key rejected.'), 'host-key', !accept);
 }
 
-type WorkspaceTab = 'files' | 'processes' | 'containers' | 'log';
-let activeWorkspaceTab: WorkspaceTab | null = null;
-
-/* -------------------------------------------------------------------------
- * Workspace dock sizing
- *
- * The dock used to be locked to a 1.618:1 split, which left the file manager
- * with very little room. It is now a user-resizable panel: drag the handle
- * (mouse, pen or touch), use the keyboard, double-click to reset, or press the
- * maximize button to give the panel the whole workspace while the SSH session
- * keeps running in the (collapsed) terminal above.
- * ---------------------------------------------------------------------- */
-const DOCK_RATIO_KEY = 'edgessh.dock-ratio';
-const DOCK_MIN_PX = 120;
-const DOCK_TERMINAL_MIN_PX = 96;
-
-function dockDefaultRatio(): number {
-  return window.matchMedia('(max-width: 760px)').matches ? 0.68 : 0.42;
-}
-
-function loadDockRatio(): number {
-  try {
-    const stored = Number(localStorage.getItem(DOCK_RATIO_KEY));
-    if (Number.isFinite(stored) && stored >= 0.18 && stored <= 1) return stored;
-  } catch { /* Storage may be unavailable; fall back to the viewport default. */ }
-  return dockDefaultRatio();
-}
-
-let dockRatio = loadDockRatio();
-let dockMaximized = false;
-let dockDrag: {
-  pointerId: number;
-  startY: number;
-  startHeight: number;
-  cardHeight: number;
-} | null = null;
-
-function dockCardHeight(): number {
-  return ui.terminalCard.getBoundingClientRect().height;
-}
-
-function applyDockRatio(): void {
-  if (dockMaximized || activeWorkspaceTab === null) return;
-  const cardHeight = dockCardHeight();
-  if (cardHeight <= 0) return;
-  const max = Math.max(DOCK_MIN_PX, cardHeight - DOCK_TERMINAL_MIN_PX);
-  const height = Math.min(max, Math.max(DOCK_MIN_PX, Math.round(cardHeight * dockRatio)));
-  ui.terminalCard.style.setProperty('--dock-height', `${height}px`);
-  ui.dockResize.setAttribute('aria-valuenow', String(Math.round((height / cardHeight) * 100)));
-}
-
-function setDockRatio(ratio: number, persist = true): void {
-  dockRatio = Math.min(1, Math.max(0.18, ratio));
-  applyDockRatio();
-  if (persist) {
-    try { localStorage.setItem(DOCK_RATIO_KEY, String(dockRatio)); } catch { /* Ignore quota/private mode. */ }
-  }
-}
-
-function setDockMaximized(maximized: boolean): void {
-  dockMaximized = maximized;
-  ui.terminalCard.classList.toggle('dock-maximized', maximized);
-  ui.dockMaximize.setAttribute('aria-pressed', String(maximized));
-  ui.dockMaximize.title = maximized
-    ? bilingual('还原面板高度', 'Restore panel height')
-    : bilingual('面板占满工作区（终端保持连接）', 'Expand the panel to fill the workspace (terminal stays connected)');
-  if (!maximized) applyDockRatio();
-  fitTerminal(true);
-}
+/** 工作台面板；事件日志是终局面板内的折叠区块，不再是并列的 dock 标签。 */
 
 function setTreeDrawer(open: boolean): void {
   ui.fileManagerPanel.classList.toggle('tree-open', open);
@@ -1432,68 +1369,20 @@ function setTreeDrawer(open: boolean): void {
   if (open) ui.fileTree.querySelector<HTMLElement>('.file-tree-row')?.focus();
 }
 
-function setWorkspaceTab(tab: WorkspaceTab | null, focus = false, rovingTab = tab ?? activeWorkspaceTab ?? 'files'): void {
-  const filesActive = tab === 'files';
-  const processesActive = tab === 'processes';
-  const containersActive = tab === 'containers';
-  const logActive = tab === 'log';
-  activeWorkspaceTab = tab;
-  ui.terminalCard.classList.toggle('workspace-panel-open', tab !== null);
-  ui.fileManagerPanel.hidden = !filesActive;
-  ui.processManagerPanel.hidden = !processesActive;
-  ui.containerManagerPanel.hidden = !containersActive;
-  ui.eventLogContainer.hidden = !logActive;
-  ui.dockCollapse.hidden = tab === null;
-  ui.dockMaximize.hidden = tab === null;
-  if (tab === null) {
-    dockMaximized = false;
-    ui.terminalCard.classList.remove('dock-maximized');
-    ui.dockMaximize.setAttribute('aria-pressed', 'false');
-    setTreeDrawer(false);
+/** 事件日志折叠：挂在终局面板底部，展开时把终端高度让出来。 */
+function setEventLogOpen(open: boolean, focus = false): void {
+  ui.eventLogContainer.hidden = !open;
+  ui.eventToggle.setAttribute('aria-selected', String(open));
+  ui.eventToggle.setAttribute('aria-expanded', String(open));
+  if (open) {
+    requestAnimationFrame(() => { ui.eventLog.scrollTop = ui.eventLog.scrollHeight; });
+    if (focus) ui.eventLogClose.focus();
   }
-  ui.fileManagerTab.setAttribute('aria-selected', String(filesActive));
-  ui.processManagerTab.setAttribute('aria-selected', String(processesActive));
-  ui.containerManagerTab.setAttribute('aria-selected', String(containersActive));
-  ui.eventToggle.setAttribute('aria-selected', String(logActive));
-  ui.fileManagerTab.setAttribute('aria-expanded', String(filesActive));
-  ui.processManagerTab.setAttribute('aria-expanded', String(processesActive));
-  ui.containerManagerTab.setAttribute('aria-expanded', String(containersActive));
-  ui.eventToggle.setAttribute('aria-expanded', String(logActive));
-  ui.fileManagerTab.tabIndex = rovingTab === 'files' ? 0 : -1;
-  ui.processManagerTab.tabIndex = rovingTab === 'processes' ? 0 : -1;
-  ui.containerManagerTab.tabIndex = rovingTab === 'containers' ? 0 : -1;
-  ui.eventToggle.tabIndex = rovingTab === 'log' ? 0 : -1;
-  if (logActive) requestAnimationFrame(() => { ui.eventLog.scrollTop = ui.eventLog.scrollHeight; });
-  if (focus) workspaceTabButtons()[rovingTab].focus();
-  requestAnimationFrame(() => {
-    applyDockRatio();
-    fitTerminal(true);
-  });
+  requestAnimationFrame(() => fitTerminal(true));
 }
 
-function workspaceTabButtons(): Record<WorkspaceTab, HTMLButtonElement> {
-  return {
-    files: ui.fileManagerTab,
-    processes: ui.processManagerTab,
-    containers: ui.containerManagerTab,
-    log: ui.eventToggle,
-  };
-}
-
-function toggleWorkspaceTab(tab: WorkspaceTab): void {
-  setWorkspaceTab(activeWorkspaceTab === tab ? null : tab, false, tab);
-}
-
-function handleWorkspaceTabKey(event: KeyboardEvent): void {
-  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-  event.preventDefault();
-  const tabs: WorkspaceTab[] = ['files', 'processes', 'containers', 'log'];
-  const buttons = workspaceTabButtons();
-  const current = tabs.findIndex((tab) => buttons[tab] === event.currentTarget);
-  const next = event.key === 'Home' ? 0
-    : event.key === 'End' ? tabs.length - 1
-      : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
-  setWorkspaceTab(tabs[next], true);
+function toggleEventLog(): void {
+  setEventLogOpen(ui.eventLogContainer.hidden);
 }
 
 function configureHostKeyDialog(hostKey: HostKeyPrompt): void {
@@ -1641,7 +1530,7 @@ function handleServerMessage(message: ServerMessage): void {
     logTerminal(bilingual('详细连接日志已在下方「事件日志」面板展开（可按 Esc 或点击「收起」还原终端）。', 'Detailed logs are open in Event Log below (press Esc or click Collapse to restore terminal).'), false);
     showFormError(text);
     toast(text, 'error');
-    setWorkspaceTab('log');
+    setEventLogOpen(true);
     sshReconnectManager?.reset();
     sshReconnectManager = null;
     reconnectParams = null;
@@ -1823,7 +1712,7 @@ function handleSshReconnectLog(entry: ReconnectLogEntry): void {
     showFormError(reason);
     event(reason, 'disconnect', true);
     logTerminal(reason, true);
-    setWorkspaceTab('log');
+    setEventLogOpen(true);
     toast(reason, 'error');
     failActiveConnection(socket, 'SSH authentication failed', messageTranslation(reason));
   } else if (entry.event === 'give_up') {
@@ -1831,7 +1720,7 @@ function handleSshReconnectLog(entry: ReconnectLogEntry): void {
     const reason = bilingual('SSH 重连失败，已达最大重试次数。', 'SSH reconnect failed; maximum retries reached.');
     event(reason, 'disconnect', true);
     logTerminal(reason, true);
-    setWorkspaceTab('log');
+    setEventLogOpen(true);
     updateConnectionStatus(messageTranslation(reason));
     setState('error');
     toast(reason, 'error');
@@ -1864,9 +1753,9 @@ async function connect(): Promise<void> {
     showFormError(validationError);
     return;
   }
-  // 独立页（文件 / 容器）连接后停在原页，只有从总览或工作台发起的连接才切到工作台。
-  const standaloneView = document.body.dataset.view;
-  if (standaloneView !== 'files' && standaloneView !== 'containers') dashboard?.openWorkspace();
+  // 工作台内连接后停在当前面板；从总览发起的连接切到终端。
+  const workbenchView = document.body.dataset.view === 'workbench';
+  if (!workbenchView) openWorkbenchTab('terminal');
   if (location.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
     showFormError(bilingual('发送 SSH 凭据前必须使用 HTTPS。', 'HTTPS is required before SSH credentials can be sent.'));
     return;
@@ -1892,7 +1781,8 @@ async function connect(): Promise<void> {
   currentRememberedFingerprint = '';
   if (pinnedKey) ui.fingerprint.value = pinnedKey;
   // 文件管理不应在隐藏终端里执行用户的初始命令；保存的主机配置仍保持原样。
-  currentInitialCommand = document.body.dataset.view === 'files' ? '' : ui.initialCommand.value;
+  const inFilePanel = document.body.dataset.view === 'workbench' && activeWorkbenchTab === 'files';
+  currentInitialCommand = inFilePanel ? '' : ui.initialCommand.value;
   initialCommandSent = false;
   pendingHostKey = null;
   awaitingHostKeyDecision = false;
@@ -1984,7 +1874,7 @@ async function connect(): Promise<void> {
       logTerminal(localize(message), true);
       showFormError(localize(message));
       toast(localize(message), 'error');
-      setWorkspaceTab('log');
+      setEventLogOpen(true);
       failActiveConnection(activeSocket, 'WebSocket transport error', message);
     });
     activeSocket.addEventListener('close', (closeEvent) => {
@@ -2033,7 +1923,7 @@ async function connect(): Promise<void> {
       event(reason, 'disconnect', isUnexpected);
       if (isUnexpected) {
         logTerminal(reason, true);
-        setWorkspaceTab('log');
+        setEventLogOpen(true);
       }
       updateConnectionStatus(messageTranslation(reason));
       setState(isUnexpected ? 'error' : 'idle');
@@ -2053,7 +1943,7 @@ async function connect(): Promise<void> {
     showFormError(message);
     event(message, 'authorization', true);
     logTerminal(message, true);
-    setWorkspaceTab('log');
+    setEventLogOpen(true);
     toast(message, 'error');
     setState('error');
   }
@@ -2335,90 +2225,8 @@ document.addEventListener('fullscreenchange', () => {
   else if (filesFullscreen) ui.fullscreenFiles.focus();
   filesFullscreen = active;
 });
-ui.fileManagerTab.addEventListener('click', () => toggleWorkspaceTab('files'));
-ui.processManagerTab.addEventListener('click', () => toggleWorkspaceTab('processes'));
-ui.containerManagerTab.addEventListener('click', () => toggleWorkspaceTab('containers'));
-ui.eventToggle.addEventListener('click', () => toggleWorkspaceTab('log'));
-ui.eventMessage.addEventListener('click', () => toggleWorkspaceTab('log'));
-ui.dockCollapse.addEventListener('click', () => setWorkspaceTab(null));
-
-ui.dockMaximize.addEventListener('click', () => setDockMaximized(!dockMaximized));
-
-ui.dockResize.addEventListener('pointerdown', (event) => {
-  if (event.pointerType === 'mouse' && event.button !== 0) return;
-  const cardHeight = dockCardHeight();
-  if (cardHeight <= 0) return;
-  dockDrag = {
-    pointerId: event.pointerId,
-    startY: event.clientY,
-    startHeight: ui.workspaceDock.getBoundingClientRect().height,
-    cardHeight,
-  };
-  ui.terminalCard.classList.add('is-resizing');
-  ui.dockResize.setPointerCapture(event.pointerId);
-  event.preventDefault();
-});
-
-ui.dockResize.addEventListener('pointermove', (event) => {
-  if (!dockDrag || event.pointerId !== dockDrag.pointerId) return;
-  const next = dockDrag.startHeight + (dockDrag.startY - event.clientY);
-  if (next >= dockDrag.cardHeight - 48) {
-    if (!dockMaximized) setDockMaximized(true);
-    return;
-  }
-  if (dockMaximized) setDockMaximized(false);
-  const max = Math.max(DOCK_MIN_PX, dockDrag.cardHeight - DOCK_TERMINAL_MIN_PX);
-  const height = Math.min(max, Math.max(DOCK_MIN_PX, Math.round(next)));
-  ui.terminalCard.style.setProperty('--dock-height', `${height}px`);
-  ui.dockResize.setAttribute('aria-valuenow', String(Math.round((height / dockDrag.cardHeight) * 100)));
-  fitTerminal(false);
-});
-
-function endDockDrag(event: PointerEvent): void {
-  if (!dockDrag || event.pointerId !== dockDrag.pointerId) return;
-  const { cardHeight } = dockDrag;
-  dockDrag = null;
-  ui.terminalCard.classList.remove('is-resizing');
-  if (ui.dockResize.hasPointerCapture(event.pointerId)) ui.dockResize.releasePointerCapture(event.pointerId);
-  if (!dockMaximized && cardHeight > 0) {
-    setDockRatio(ui.workspaceDock.getBoundingClientRect().height / cardHeight);
-  }
-  fitTerminal(true);
-}
-
-ui.dockResize.addEventListener('pointerup', endDockDrag);
-ui.dockResize.addEventListener('pointercancel', endDockDrag);
-
-ui.dockResize.addEventListener('dblclick', () => {
-  setDockMaximized(false);
-  setDockRatio(dockDefaultRatio());
-  fitTerminal(true);
-});
-
-ui.dockResize.addEventListener('keydown', (event) => {
-  const cardHeight = dockCardHeight();
-  if (cardHeight <= 0) return;
-  const current = ui.workspaceDock.getBoundingClientRect().height;
-  if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-    event.preventDefault();
-    setDockMaximized(false);
-    setDockRatio((current + (event.key === 'ArrowUp' ? 32 : -32)) / cardHeight);
-    fitTerminal(true);
-  } else if (event.key === 'Home') {
-    event.preventDefault();
-    setDockMaximized(false);
-    setDockRatio(0.2);
-    fitTerminal(true);
-  } else if (event.key === 'End') {
-    event.preventDefault();
-    setDockMaximized(true);
-  } else if (event.key === 'Enter') {
-    event.preventDefault();
-    setDockMaximized(false);
-    setDockRatio(dockDefaultRatio());
-    fitTerminal(true);
-  }
-});
+ui.eventToggle.addEventListener('click', () => toggleEventLog());
+ui.eventMessage.addEventListener('click', () => toggleEventLog());
 
 const narrowViewport = window.matchMedia('(max-width: 760px)');
 ui.fileTreeToggle.addEventListener('click', () => {
@@ -2444,10 +2252,8 @@ ui.fileTree.addEventListener('click', (clickEvent) => {
 narrowViewport.addEventListener('change', (changeEvent) => {
   if (!changeEvent.matches) setTreeDrawer(false);
 });
-new ResizeObserver(() => {
-  if (activeWorkspaceTab !== null && !dockDrag) applyDockRatio();
-}).observe(ui.terminalCard);
-ui.eventLogClose.addEventListener('click', () => setWorkspaceTab(null));
+new ResizeObserver(() => fitTerminal(false)).observe(ui.terminalCard);
+ui.eventLogClose.addEventListener('click', () => setEventLogOpen(false));
 ui.eventLogClear.addEventListener('click', () => {
   ui.eventLog.replaceChildren();
 });
@@ -2457,10 +2263,6 @@ document.querySelector<HTMLAnchorElement>('#app .brand')?.addEventListener('clic
     dashboard?.returnHome();
   }
 });
-ui.fileManagerTab.addEventListener('keydown', handleWorkspaceTabKey);
-ui.processManagerTab.addEventListener('keydown', handleWorkspaceTabKey);
-ui.containerManagerTab.addEventListener('keydown', handleWorkspaceTabKey);
-ui.eventToggle.addEventListener('keydown', handleWorkspaceTabKey);
 ui.languageToggle.addEventListener('click', () => {
   applyLanguage(currentLanguage === 'zh-CN' ? 'en' : 'zh-CN', true);
   renderProfiles();
@@ -2511,10 +2313,10 @@ document.addEventListener('keydown', (keyEvent) => {
   } else if (panelOpen) {
     setPanelOpen(false);
     ui.panelToggle.focus();
-  } else if (activeWorkspaceTab !== null) {
+  } else if (!ui.eventLogContainer.hidden) {
     keyEvent.preventDefault();
-    setWorkspaceTab(null);
-    terminal.focus();
+    setEventLogOpen(false);
+    ui.eventToggle.focus();
   }
 });
 
@@ -2527,7 +2329,7 @@ async function initialize(): Promise<void> {
   setPanelOpen(panelOpen);
   setAuthMethod('password');
   setState('idle');
-  setWorkspaceTab(null);
+  setEventLogOpen(false);
   ui.sessionTitle.textContent = bilingual('无活动会话', 'No active session');
   ui.sessionSubtitle.textContent = bilingual('选择目标并连接', 'Choose a target and connect');
   ui.eventMessage.textContent = bilingual('Worker 运行时待命', 'Worker runtime standing by');
@@ -2542,13 +2344,10 @@ async function initialize(): Promise<void> {
       const selectionGeneration = historyPasswordLoadGeneration;
       await loading;
       // 返回总览会作废凭据读取；即使用户立刻回到文件页，也不能启动已经取消的连接。
-      if (selectionGeneration === historyPasswordLoadGeneration && document.body.dataset.view === 'files') await connect();
+      if (selectionGeneration === historyPasswordLoadGeneration
+        && document.body.dataset.view === 'workbench' && activeWorkbenchTab === 'files') await connect();
     },
     disconnect: () => disconnect(),
-    openTerminal: () => {
-      dashboard?.openWorkspace();
-      if (connectionState === 'idle' || connectionState === 'error') setPanelOpen(true);
-    },
   }, fileManager);
   containerPage = new ContainerPage(ui.containerManagerPanel, {
     connect: async (host) => {
@@ -2559,17 +2358,26 @@ async function initialize(): Promise<void> {
       await loading;
       // 与文件页一致：离开页面会作废凭据读取，不能启动已取消的连接。
       if (selectionGeneration === historyPasswordLoadGeneration
-        && document.body.dataset.view === 'containers') await connect();
+        && document.body.dataset.view === 'workbench' && activeWorkbenchTab === 'containers') await connect();
     },
     disconnect: () => disconnect(),
-    openTerminal: () => {
-      dashboard?.openWorkspace();
-      if (connectionState === 'idle' || connectionState === 'error') setPanelOpen(true);
-    },
   }, containerManager);
+  workbench = new Workbench(filePage, containerPage, ui.terminalCard, {
+    openFiles: () => undefined,
+    openContainers: () => undefined,
+    openTerminal: () => undefined,
+  });
+  workbench.mount();
+  // 事件日志是终局面板的折叠区块：搬进 terminal-tools 之后，
+  // 避免留在已空的 #workspace-dock 里永远不显示。
+  ui.terminalCard.querySelector('.terminal-pane')!.append(ui.eventLogContainer);
+  // 首次进入工作台时把文件面板搬进槽位并显示；终端面板保持常驻。
+  workbench.show('files');
+  const bench = workbench;
   dashboard = new Dashboard({
     files: filePage,
     containers: containerPage,
+    openWorkbench: (tab) => openWorkbenchTab(tab),
     snippets: new Snippets(ui.terminalCard, (snippet) => {
       // 片段只进入草稿，尤其多行命令不能通过粘贴意外立即执行。
       const input = document.getElementById('command-editor-input') as HTMLTextAreaElement;
@@ -2580,7 +2388,7 @@ async function initialize(): Promise<void> {
       if (document.getElementById('command-editor')!.hidden) document.getElementById('command-editor-toggle')!.click();
       input.focus();
       toast(bilingual('已填入命令编辑器，确认后再发送。', 'Added to the command editor. Review before sending.'), 'info');
-    }, () => dashboard?.openWorkspace(), () => dashboard?.showSnippets()),
+    }, () => openWorkbenchTab('terminal'), () => dashboard?.showSnippets()),
     refresh: async () => {
       profiles = await loadProfiles();
       renderProfiles();
@@ -2600,6 +2408,7 @@ async function initialize(): Promise<void> {
       clearCredentials();
     },
   });
+  dashboard.attachWorkbench(bench);
   await dashboard.start();
 }
 

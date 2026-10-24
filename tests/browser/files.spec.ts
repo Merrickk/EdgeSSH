@@ -2,20 +2,21 @@ import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { connectFiles, fileFixture } from './file-fixture';
 
-test('独立入口、空状态与移动端布局', async ({ page }, testInfo) => {
+test('工作台入口、空状态与移动端布局', async ({ page }, testInfo) => {
   await fileFixture(page, { noHosts: true });
-  await expect(page.locator('#files-heading')).toBeVisible();
+  // 默认落在文件面板：左上只有中文标题，右上角是三个切换标签。
+  await expect(page.locator('#workbench-title')).toHaveText('文件');
+  await expect(page.locator('#workbench-tab-files')).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('#rail-files')).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('#files-connect')).toBeDisabled();
   await expect(page.locator('#file-upload')).toBeDisabled();
-  await expect(page.locator('#fullscreen-files')).toBeDisabled();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('files-empty.png'), fullPage: true });
   await page.locator('#rail-overview').click();
   await expect(page.locator('#hosts-heading')).toBeVisible();
 });
 
-test('文件管理全屏在独立页与工作台保留目录、选择和共享连接', async ({ page }, testInfo) => {
+test('文件管理全屏保留目录、选择和共享连接', async ({ page }, testInfo) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   const fixture = await fileFixture(page);
@@ -24,47 +25,41 @@ test('文件管理全屏在独立页与工作台保留目录、选择和共享�
   await expect(page.locator('#file-manager-path')).toHaveValue('/root');
   await page.locator('.files-list').getByRole('treeitem', { name: 'README.md', exact: true }).click();
 
-  for (const view of ['files', 'workspace']) {
-    const panel = page.locator('#file-manager-panel');
-    const before = await panel.boundingBox();
-    await page.locator('#fullscreen-files').click();
-    await expect.poll(() => page.evaluate(() => document.fullscreenElement?.id)).toBe('file-manager-panel');
-    await expect(page.locator('#fullscreen-files')).toBeHidden();
-    await expect(page.locator('#exit-fullscreen-files')).toBeVisible();
-    await expect(page.locator('#exit-fullscreen-files')).toBeFocused();
-    const exitBounds = await page.locator('#exit-fullscreen-files').boundingBox();
-    expect(exitBounds!.width).toBeGreaterThanOrEqual(44);
-    expect(exitBounds!.height).toBeGreaterThanOrEqual(44);
-    await expect(page.locator('#file-download')).toBeEnabled();
-    await expect(page.locator('#file-manager-path')).toHaveValue('/root');
-    const bounds = await panel.boundingBox();
-    const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
-    expect(bounds!.x).toBe(0);
-    expect(bounds!.y).toBe(0);
-    expect(bounds!.width).toBe(viewport.width);
-    expect(bounds!.height).toBe(viewport.height);
-    expect(bounds!.height).toBeGreaterThan(before!.height);
-    expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-    const table = await panel.locator('.file-table-wrap').boundingBox();
-    expect(table!.height).toBeGreaterThan(viewport.height / 2);
-    await page.screenshot({ path: testInfo.outputPath(`files-fullscreen-${view}.png`) });
-    await page.locator('#exit-fullscreen-files').click();
-    await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
-    await expect(page.locator('#fullscreen-files')).toBeFocused();
-    await expect(page.locator('#exit-fullscreen-files')).toBeHidden();
-    await expect(panel).toBeVisible();
-    await expect(page.locator('body')).toHaveAttribute('data-view', view);
-    if (view === 'files') {
-      await expect(page.locator('#files-connection-state')).toHaveText('SSH 已连接');
-      await page.locator('#files-terminal').click();
-      await page.locator('#file-manager-tab').click();
-    }
-  }
+  const panel = page.locator('#file-manager-panel');
+  const before = await panel.boundingBox();
+  await page.locator('#fullscreen-files').click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.id)).toBe('file-manager-panel');
+  await expect(page.locator('#fullscreen-files')).toBeHidden();
+  await expect(page.locator('#exit-fullscreen-files')).toBeVisible();
+  await expect(page.locator('#exit-fullscreen-files')).toBeFocused();
+  const exitBounds = await page.locator('#exit-fullscreen-files').boundingBox();
+  expect(exitBounds!.width).toBeGreaterThanOrEqual(44);
+  expect(exitBounds!.height).toBeGreaterThanOrEqual(44);
+  await expect(page.locator('#file-download')).toBeEnabled();
+  await expect(page.locator('#file-manager-path')).toHaveValue('/root');
+  const bounds = await panel.boundingBox();
+  const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  expect(bounds!.x).toBe(0);
+  expect(bounds!.y).toBe(0);
+  expect(bounds!.width).toBe(viewport.width);
+  expect(bounds!.height).toBe(viewport.height);
+  expect(bounds!.height).toBeGreaterThan(before!.height);
+  expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const table = await panel.locator('.file-table-wrap').boundingBox();
+  expect(table!.height).toBeGreaterThan(viewport.height / 2);
+  await page.screenshot({ path: testInfo.outputPath('files-fullscreen.png') });
+  await page.locator('#exit-fullscreen-files').click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
+  await expect(page.locator('#fullscreen-files')).toBeFocused();
+  await expect(page.locator('#exit-fullscreen-files')).toBeHidden();
+  await expect(panel).toBeVisible();
+  await expect(page.locator('body')).toHaveAttribute('data-view', 'workbench');
+  await expect(page.locator('#files-connection-state')).toHaveText('SSH 已连接');
 
+  // 全屏前后都是同一个 SSH / SFTP 会话。
   expect(fixture.sshSockets).toHaveLength(1);
   expect(fixture.sftpSockets).toHaveLength(1);
   expect(errors).toEqual([]);
-  await page.getByRole('button', { name: '文件管理', exact: true }).click();
   await page.locator('#files-connect').click();
   await expect(page.locator('#fullscreen-files')).toBeDisabled();
 });
@@ -86,25 +81,24 @@ test('连接、目录导航与共享终端会话不重复附着', async ({ page 
   await expect(page.locator('#file-manager-path')).toHaveValue('/root/backups');
   await page.locator('#file-up').click();
   await expect(page.locator('#file-manager-path')).toHaveValue('/root');
-  await page.locator('.files-list').getByRole('treeitem', { name: 'README.md', exact: true }).click();
-  await page.locator('#files-terminal').click();
-  await expect(page.locator('#terminal-card')).toBeVisible();
-  await page.locator('#file-manager-tab').click();
-  await expect(page.locator('#app #file-manager-panel')).toBeVisible();
-  await expect(page.locator('.files-list')).toHaveCount(0);
-  await expect(page.locator('#file-table-body')).toContainText('README.md');
-  await expect(page.locator('#file-table-body tr').filter({ hasText: 'README.md' })).toHaveAttribute('aria-selected', 'true');
-  await page.getByRole('button', { name: '文件管理', exact: true }).click();
+  // 切到终局面板再切回文件：同一会话不重复附着，终端保持连接。
+  await page.locator('#workbench-tab-terminal').click();
+  await expect(page.locator('#workbench-title')).toHaveText('终端');
+  await expect(page.locator('#workbench-panel-terminal')).toBeVisible();
+  await expect(page.locator('#workbench-panel-files')).toBeHidden();
+  await page.locator('#workbench-tab-files').click();
+  await expect(page.locator('#workbench-title')).toHaveText('文件');
   await expect(page.locator('.files-page #file-manager-panel')).toBeVisible();
   await expect(page.locator('#file-manager-path')).toHaveValue('/root');
   await expect(page.locator('.files-list [role="tree"]')).toBeVisible();
+  // 切回面板会重建列表，重新选中同一条目验证数据仍在。
+  await page.locator('.files-list').getByRole('treeitem', { name: 'README.md', exact: true }).click();
   await expect(page.locator('.files-list').getByRole('treeitem', { name: 'README.md', exact: true })).toHaveAttribute('aria-selected', 'true');
+  // 关键断言：三个通道都只有一个，切换面板没有重连。
   expect(fixture.sshSockets).toHaveLength(1);
   expect(fixture.sftpSockets).toHaveLength(1);
   expect(fixture.calls.filter((call) => call.type === 'terminal-input')).toHaveLength(0);
-  await page.locator('#files-terminal').click();
-  await expect(page.locator('#app #file-manager-panel')).toBeVisible();
-  await expect(page.locator('#file-manager-tab')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#files-connection-state')).toHaveText('SSH 已连接');
 });
 
 test('常用文件图标、键盘选择和 Enter 导航', async ({ page }, testInfo) => {
@@ -265,13 +259,17 @@ test('传输时离开需确认，切换终端不打断传输', async ({ page }) 
   await expect(page.locator('#file-upload')).toBeEnabled();
   await page.locator('#file-upload-input').setInputFiles({ name: 'pending.txt', mimeType: 'text/plain', buffer: Buffer.from('pending') });
   await expect(page.locator('#file-manager-progress')).toBeVisible();
-  page.once('dialog', (dialog) => dialog.dismiss());
-  await page.locator('#rail-overview').click();
-  await expect(page.locator('#files-heading')).toBeVisible();
-  await page.locator('#files-terminal').click();
-  await page.getByRole('button', { name: '文件管理', exact: true }).click();
+  // 传输中切到其他面板再切回：进度保留，SFTP 通道没有重连。
+  await page.locator('#workbench-tab-terminal').click();
+  await expect(page.locator('#file-manager-progress')).toBeHidden();
+  await page.locator('#workbench-tab-files').click();
   await expect(page.locator('#file-manager-progress')).toBeVisible();
   expect(fixture.sftpSockets).toHaveLength(1);
+  // 只有真正断开连接才需要确认。
+  page.once('dialog', (dialog) => dialog.dismiss());
+  await page.locator('#rail-overview').click();
+  await expect(page.locator('#file-manager-progress')).toBeVisible();
+  await page.locator('#rail-files').click();
   page.once('dialog', (dialog) => dialog.accept());
   await page.locator('#files-connect').click();
   await expect(page.locator('#file-manager-progress')).toBeHidden();
@@ -287,10 +285,9 @@ test('读取凭据期间禁止切换终端，避免无反馈取消连接', async
   });
   await connectFiles(page);
   await expect(page.locator('#files-connect')).toHaveText('读取凭据中…');
-  await expect(page.locator('#files-terminal')).toBeDisabled();
   finish();
   await expect(page.locator('#file-upload')).toBeEnabled();
-  await expect(page.locator('#files-terminal')).toBeEnabled();
+  await expect(page.locator('#files-connect')).toHaveText('断开连接');
 });
 
 test('离开再返回文件页，迟到的凭据不会启动已取消会话', async ({ page }) => {

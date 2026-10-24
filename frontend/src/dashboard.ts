@@ -4,6 +4,7 @@ import type { FilePage } from './file-page';
 import type { Snippets } from './snippets';
 import { ForwardPage } from './forward-page';
 import type { ContainerPage } from './container-page';
+import { Workbench, type WorkbenchTab } from './workbench';
 import { countryFlag } from './flags';
 import { systemIcon } from './os-icons';
 import './dashboard.css';
@@ -11,6 +12,8 @@ import './dashboard.css';
 interface DashboardActions {
   files: FilePage;
   containers: ContainerPage;
+  /** 打开统一工作台并切换到指定面板；终端常驻其中。 */
+  openWorkbench(tab: WorkbenchTab): void;
   snippets: Snippets;
   refresh(): Promise<CloudHost[]>;
   connect(host: CloudHost): Promise<void>;
@@ -46,8 +49,12 @@ export class Dashboard {
   private readonly dialog: HTMLDialogElement;
   private readonly form: HTMLFormElement;
   private readonly forwarding = new ForwardPage();
+  private readonly actions: DashboardActions;
+  /** 由 main.ts 注入：三个面板共用一层外壳，终局面板常驻其中。 */
+  private workbench: Workbench | null = null;
 
-  constructor(private readonly actions: DashboardActions) {
+  constructor(actions: DashboardActions) {
+    this.actions = actions;
     this.root.id = 'dashboard';
     this.root.innerHTML = `
       <header class="home-header">
@@ -118,10 +125,11 @@ export class Dashboard {
         </form>
       </dialog>`;
     document.body.prepend(this.root);
-    this.get('.home-layout').append(this.actions.files.root);
-    this.get('.home-layout').append(this.actions.containers.root);
-    this.get('.home-layout').append(this.actions.snippets.page);
-    this.get('.home-layout').append(this.forwarding.root);
+    // 文件 / 容器页的 root 由 Workbench.mount() 收进自己的面板槽，
+    // 这里只挂工作台本身，避免两个页面并列把工作台挤出可视区。
+    this.get('.home-content').append(this.actions.snippets.page);
+    // 转发页放在 .home-content（第二列）；home-layout 只定义了两列。
+    this.get('.home-content').append(this.forwarding.root);
     this.dialog = this.get<HTMLDialogElement>('#host-editor-dialog');
     this.form = this.get<HTMLFormElement>('#cloud-host-form');
     this.get('#account-action').addEventListener('click', async (event) => {
@@ -152,7 +160,7 @@ export class Dashboard {
     for (const id of ['#quick-connect', '#bottom-quick']) this.get(id).addEventListener('click', () => {
       if (this.busy || !this.actions.files.confirmLeave()) return;
       this.actions.leaveWorkspace();
-      this.openWorkspace(); this.actions.quickConnect();
+      this.enterWorkbench('terminal'); this.actions.quickConnect();
     });
     this.field('authMethod').addEventListener('change', () => this.updateCredentialFields());
     this.field('cfTunnel').addEventListener('change', () => this.updateCredentialFields());
@@ -181,6 +189,24 @@ export class Dashboard {
     forwarding.addEventListener('click', () => this.showForwarding());
     document.querySelector('#app .topbar-actions')!.prepend(back, files, forwarding);
     this.show();
+  }
+
+  /** 隐藏总览独有的内容块，让位给工作台 / 片段 / 转发页。 */
+  private hideOverviewBlocks(): void {
+    for (const selector of ['.home-main-grid', '.home-bottom', '.home-footer', '#home-notice']) {
+      this.get(selector).hidden = true;
+    }
+    // 搜索与“新建主机”是总览专属，其他页面不占顶栏空间。
+    this.get('.home-search').hidden = true;
+    this.get('.header-add').hidden = true;
+  }
+
+  /** 挂载统一工作台；终局面板由 main.ts 提供，切换面板不打断 SSH 会话。 */
+  attachWorkbench(workbench: Workbench): void {
+    this.workbench = workbench;
+    // 必须放进 .home-content（第二列）：home-layout 只定义了两列，
+    // 直接 append 会让工作台落到侧边栏那一列。
+    this.get('.home-content').append(workbench.root);
   }
 
   private get<T extends HTMLElement = HTMLElement>(selector: string): T { return this.root.querySelector<T>(selector)!; }
@@ -234,10 +260,15 @@ export class Dashboard {
 
   show(): void {
     this.forwarding.hide();
-    this.actions.files.hide();
-    this.actions.containers.hide();
     this.actions.snippets.hide();
     this.isHome = true; this.root.hidden = false;
+    // 总览内容与三个面板互斥显示。
+    for (const selector of ['.home-main-grid', '.home-bottom', '.home-footer']) {
+      this.get(selector).hidden = false;
+    }
+    this.get('#home-notice').hidden = true;
+    this.get('.home-search').hidden = false;
+    this.get('.header-add').hidden = false;
     this.get('.home-content').hidden = false;
     this.selectNavigation('rail-overview');
     document.getElementById('app')!.hidden = true;
@@ -252,54 +283,36 @@ export class Dashboard {
     void this.refresh();
   }
 
-  openWorkspace(): void {
+  /**
+   * 进入工作台：只隐藏总览自己的内容（地球、统计、页脚），
+   * 保留 .home-content 作为三个面板的容器——工作台就挂在这里面。
+   */
+  enterWorkbench(tab: WorkbenchTab): void {
+    console.log('DBG enterWorkbench', tab);
     this.forwarding.hide();
-    this.actions.files.hide();
-    this.actions.containers.hide();
-    this.actions.snippets.hide();
-    this.isHome = false; this.root.hidden = true;
-    document.getElementById('app')!.hidden = false;
-    document.body.dataset.view = 'workspace';
-    this.globe?.setActive(false);
-    window.dispatchEvent(new Event('resize'));
-    this.actions.snippets.load();
-  }
-
-  showFiles(): void {
-    this.forwarding.hide();
-    this.actions.containers.hide();
     this.actions.snippets.hide();
     this.isHome = false; this.root.hidden = false;
-    this.get('.home-content').hidden = true;
-    document.getElementById('app')!.hidden = true;
-    document.body.dataset.view = 'files';
-    this.selectNavigation('rail-files');
+    this.hideOverviewBlocks();
+    document.body.dataset.view = 'workbench';
+    this.selectNavigation(tab === 'files' ? 'rail-files' : tab === 'containers' ? 'rail-containers' : 'rail-overview');
     this.globe?.setActive(false);
-    this.actions.files.show();
+    // 片段浮窗挂在终局面板内，进入工作台时强制刷新，切到终端即可用。
+    this.actions.snippets.refresh();
   }
 
-  showContainers(): void {
-    if (!this.actions.files.confirmLeave()) return;
-    this.forwarding.hide();
-    this.actions.files.hide();
-    this.actions.snippets.hide();
-    this.isHome = false; this.root.hidden = false;
-    this.get('.home-content').hidden = true;
-    document.getElementById('app')!.hidden = true;
-    document.body.dataset.view = 'containers';
-    this.selectNavigation('rail-containers');
-    this.globe?.setActive(false);
-    this.actions.containers.show();
-  }
+  /** 三个面板共用同一层工作台外壳，切换不打断 SSH 会话。 */
+  showFiles(): void { this.actions.openWorkbench('files'); }
+
+  showContainers(): void { this.actions.openWorkbench('containers'); }
+
+  showTerminal(): void { this.actions.openWorkbench('terminal'); }
 
   showSnippets(): void {
     if (!this.actions.files.confirmLeave()) return;
     this.forwarding.hide();
-    this.actions.containers.hide();
     // 仅切换视图，不结束 SSH；在片段页编辑后可回到同一会话。
-    this.actions.files.hide();
     this.isHome = false; this.root.hidden = false;
-    this.get('.home-content').hidden = true;
+    this.hideOverviewBlocks();
     document.getElementById('app')!.hidden = true;
     document.body.dataset.view = 'snippets';
     this.selectNavigation('rail-snippets');
@@ -309,11 +322,9 @@ export class Dashboard {
 
   showForwarding(): void {
     if (!this.actions.files.confirmLeave()) return;
-    this.actions.files.hide();
-    this.actions.containers.hide();
     this.actions.snippets.hide();
     this.isHome = false; this.root.hidden = false;
-    this.get('.home-content').hidden = true;
+    this.hideOverviewBlocks();
     document.getElementById('app')!.hidden = true;
     document.body.dataset.view = 'forward';
     this.selectNavigation('rail-forward');
@@ -336,7 +347,6 @@ export class Dashboard {
   private signedOut(): void {
     this.actions.leaveWorkspace();
     this.actions.snippets.clear();
-    this.actions.containers.hide();
     this.authenticated = false;
     this.get('#account-label').textContent = '未登录';
     const action = this.get<HTMLAnchorElement>('#account-action');
@@ -448,7 +458,7 @@ export class Dashboard {
     if (this.busy) return;
     this.busy = true; this.root.setAttribute('aria-busy', 'true');
     this.notice(`正在读取 ${host.name} 的连接凭据…`);
-    this.openWorkspace();
+    this.enterWorkbench('terminal');
     this.get('#home-notice').hidden = true;
     try { await this.actions.connect(host); }
     catch (error) { this.notice(error instanceof Error ? error.message : '连接准备失败。'); }

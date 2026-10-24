@@ -1281,11 +1281,16 @@ button:disabled {
   }
 }
 
+/* 行结构：工具栏 / 事件条 / 终端舞台 / 快捷键栏 / 事件日志。
+   日志默认收起（0fr），展开时占最多 46%，终端始终保留最小高度。 */
+/* 行结构：工具栏 / 事件条 / 终端舞台 / 快捷键栏。
+   事件日志是浮层（不占行），展开时盖在终端下半部分，避免挤压舞台。 */
 .terminal-pane {
+  position: relative;
   display: grid;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: 42px minmax(0, 1fr) auto;
+  grid-template-rows: 42px auto minmax(120px, 1fr) auto;
   overflow: hidden;
 }
 
@@ -1735,6 +1740,28 @@ button:disabled {
   font-weight: 600;
 }
 
+/* 事件日志：终局面板内的折叠区块，展开时把终端高度让给它。 */
+/* 事件日志：终侧面板内的浮层，展开时盖在终端下半部分。
+   作为浮层而不是新增 grid 行，终端舞台高度不受影响，也不会被片段浮窗挤走。 */
+.terminal-pane > #event-log-container {
+  position: absolute;
+  z-index: 14;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  /* min-height 用 vh 兜底：刚切到终侧面版时父容器可能还没算完高度，
+     只用百分比会让浮层塌成 0，关不掉也点不到。 */
+  min-height: min(140px, 40vh);
+  max-height: min(52%, 60vh);
+  border-top: 1px solid var(--home-line);
+  background: var(--home-surface);
+  box-shadow: 0 -12px 32px rgba(17, 24, 39, 0.14);
+}
+
+.terminal-pane > #event-log-container[hidden] { display: none; }
+
 .workspace-dock {
   display: grid;
   min-width: 0;
@@ -1830,6 +1857,9 @@ button:disabled {
   overflow: hidden;
   background: var(--surface);
 }
+
+/* display:grid 会覆盖 [hidden] 的 display:none，必须显式声明。 */
+.event-log-container[hidden] { display: none; }
 
 .event-log-header {
   display: flex;

@@ -30,5 +30,8 @@ export class Snippets {
 
   hide(): void { this.page.hidden = true; }
   load(): void { void this.store.load(true); }
+
+  /** 进入工作台时刷新：浮窗挂在终局面板内，用户切过去就要看到最新片段。 */
+  refresh(): void { console.log('DBG snippets.refresh'); void this.store.load(true); }
   clear(): void { this.store.clear(); }
 }

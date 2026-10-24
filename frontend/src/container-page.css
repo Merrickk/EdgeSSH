@@ -1,23 +1,4 @@
-/* 独立容器页：与文件页同一套白橙主题与紧凑度量。 */
-body[data-view='containers'] { height: auto; min-height: 100%; overflow-y: auto; background: var(--home-bg); }
-body[data-view='containers'] {
-  --surface: var(--home-surface);
-  --surface-2: var(--home-bg);
-  --surface-3: var(--home-line);
-  --panel: var(--home-surface);
-  --border: var(--home-line);
-  --border-soft: var(--home-line);
-  --text: var(--home-ink);
-  --muted: var(--home-muted);
-  --muted-2: var(--home-muted);
-  --accent: var(--home-accent-hover);
-  --accent-dim: var(--home-accent-soft);
-  --danger: var(--home-danger);
-  --danger-dim: var(--home-accent-soft);
-  --warning: var(--home-accent-hover);
-  --sans: var(--home-font);
-  --mono: var(--home-mono);
-}
+/* 容器页：令牌由 .workbench 提供，这里只放布局与度量。 */
 
 .containers-page {
   min-width: 0; width: 100%; max-width: 1700px; margin-inline: auto;

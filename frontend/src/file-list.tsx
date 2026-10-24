@@ -87,9 +87,11 @@ function FileNode({ node, style }: NodeRendererProps<FileListItem>) {
   </div>;
 }
 
-/** 从 CSS 读取行高，独立页与工作台坞各有一套紧凑度。 */
+/**
+ * 行高统一由 CSS 变量 --files-row-height 驱动（含窄屏档），
+ * 这里只负责读取，避免 JS 与样式表各写一份行高。
+ */
 function readRowHeight(): number {
-  if (matchMedia('(max-width: 600px)').matches) return 48;
   const raw = getComputedStyle(document.documentElement).getPropertyValue('--files-row-height');
   const parsed = Number.parseFloat(raw);
   return Number.isFinite(parsed) && parsed >= 24 ? parsed : 44;

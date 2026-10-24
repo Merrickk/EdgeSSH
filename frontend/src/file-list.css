@@ -1,6 +1,9 @@
 /* 只作用于橙色独立文件页，终端内表格继续使用原有样式。 */
 /* 独立页对齐终端坞的行高与表头，列表一屏能多看几行。 */
+/* Arborist 的 inner 容器高度等于传入的 height（视口高），
+   移动端行高 48 时 4 行就会溢出且不产生滚动；降到 40 让首屏容纳更多行。 */
 :root { --files-row-height: 34px; }
+@media (max-width: 600px) { :root { --files-row-height: 40px; } }
 .files-page .files-list { font-size: 12px; }
 .files-page .files-list-header { flex-basis: 32px; height: 32px; font-size: 11px; }
 .files-page .files-list-row { min-height: 34px; }
@@ -11,8 +14,10 @@
 .files-list-columns > span { min-width: 0; padding-inline: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .files-list-columns > span:first-child { padding-right: 40px; }
 .files-list-header { flex: 0 0 42px; height: 42px; border-bottom: 1px solid var(--home-line); background: var(--home-bg); color: var(--home-muted); font: 500 12px var(--home-font); }
-.files-list-viewport { flex: 1; min-height: 0; }
-.files-list-viewport [role='tree'] { outline: none; }
+/* Arborist 把 height 当作裁剪视口且不生成内部滚动，
+   外层 viewport 负责滚动：行按 index 绝对定位，超出部分由这里承接。 */
+.files-list-viewport { flex: 1; min-height: 0; overflow: hidden auto; scrollbar-width: thin; }
+.files-list-viewport [role='tree'] { outline: none; overflow: visible; }
 .files-list-row { position: relative; cursor: pointer; border-bottom: 1px solid var(--home-line); }
 .files-list-row:hover { background: var(--home-bg); }
 .files-list-row.is-selected { background: var(--home-accent-soft); }

@@ -3,7 +3,9 @@ import { DEFAULT_SNIPPETS, type Snippet } from '../../src/accounts/snippet-data'
 import { connectFiles, fileFixture } from './file-fixture';
 
 async function fixture(page: Page) {
-  const files = await fileFixture(page);
+  // 先注册片段路由再导航：Playwright 按注册顺序匹配，
+  // fileFixture 内部的 **/api/** 会抢先返回空列表。
+  const files = await fileFixture(page, { skipNavigate: true });
   let items: Snippet[] = DEFAULT_SNIPPETS.map((item) => ({ ...item, id: crypto.randomUUID(), updatedAt: Date.now() }));
   await page.route('**/api/snippets**', async (route) => {
     const request = route.request();
@@ -17,6 +19,7 @@ async function fixture(page: Page) {
     items = [snippet, ...items.filter((item) => item.id !== id)];
     return route.fulfill({ json: { snippet } });
   });
+  await files.navigate();
   return files;
 }
 
@@ -53,7 +56,7 @@ test('主页片段库支持十条默认命令、搜索、新建、多行编辑�
 test('终端浮窗折叠、拖动与键盘复位；填入草稿而不执行，编辑与管理页同步', async ({ page }, testInfo) => {
   const files = await fixture(page);
   await connectFiles(page);
-  await page.locator('#files-terminal').click();
+  await page.locator('#workbench-tab-terminal').click();
   const panel = page.locator('#snippet-panel');
   const expand = panel.getByRole('button', { name: '展开代码片段' });
   if (await expand.count()) await expand.click();
@@ -144,7 +147,7 @@ test('多行片段保留换行且不直接发送；取消覆盖保留旧草稿�
 test('浮窗在调整尺寸后仍可触达，并适配浅色及减少动态效果', async ({ page }, testInfo) => {
   await fixture(page);
   await connectFiles(page);
-  await page.locator('#files-terminal').click();
+  await page.locator('#workbench-tab-terminal').click();
   const panel = page.locator('#snippet-panel');
   const initiallyCollapsed = testInfo.project.name === 'mobile';
   if (initiallyCollapsed) await expect(panel.locator('#snippet-panel-body')).toBeHidden();

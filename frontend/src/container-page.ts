@@ -4,7 +4,6 @@ import './container-page.css';
 interface ContainerPageActions {
   connect(host: ContainerHost): Promise<void>;
   disconnect(): void;
-  openTerminal(): void;
 }
 
 /** 只取容器页需要的字段，避免和 cloud-api 的 CloudHost 形成循环依赖。 */
@@ -24,7 +23,6 @@ const folderIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4
  */
 export class ContainerPage {
   readonly root = document.createElement('main');
-  private readonly dockMarker = document.createComment('shared-container-manager');
   private readonly select: HTMLSelectElement;
   private readonly connectButton: HTMLButtonElement;
   private hosts: ContainerHost[] = [];
@@ -37,15 +35,9 @@ export class ContainerPage {
     private readonly actions: ContainerPageActions,
     private readonly manager: ContainerManager,
   ) {
-    panel.before(this.dockMarker);
     this.root.className = 'containers-page';
     this.root.hidden = true;
     this.root.innerHTML = `
-      <header class="containers-heading">
-        <div><p class="home-eyebrow">REMOTE CONTAINERS</p><h1 id="containers-heading" tabindex="-1">容器管理</h1>
-          <p>在服务器之间切换，看清每一个容器的状态与资源占用。</p></div>
-        <button class="home-button" id="containers-terminal" type="button">打开 SSH 终端 ↗</button>
-      </header>
       <section class="containers-connection" aria-label="容器管理连接">
         <span class="containers-host-icon">${folderIcon}</span>
         <label class="containers-host-field" for="containers-host"><span>目标主机</span>
@@ -66,7 +58,6 @@ export class ContainerPage {
     this.connectButton = this.get<HTMLButtonElement>('#containers-connect');
     this.select.addEventListener('change', () => this.renderConnection());
     this.connectButton.addEventListener('click', () => void this.toggleConnection());
-    this.get('#containers-terminal').addEventListener('click', () => this.actions.openTerminal());
   }
 
   private get<T extends HTMLElement = HTMLElement>(selector: string): T {
@@ -76,21 +67,20 @@ export class ContainerPage {
   show(): void {
     this.mounted = true;
     this.root.hidden = false;
-    this.get('.containers-panel-slot').append(this.panel);
+    // 面板只搬一次：终局与文件面板同理，避免重复移动破坏 SSH 附属通道。
+    if (this.panel.parentElement !== this.get('.containers-panel-slot')) {
+      this.get('.containers-panel-slot').append(this.panel);
+    }
     this.panel.hidden = false;
     this.panel.setAttribute('role', 'region');
-    this.panel.setAttribute('aria-labelledby', 'containers-heading');
-    this.get('#containers-heading').focus();
+    this.panel.setAttribute('aria-labelledby', 'workbench-title');
   }
 
   hide(): void {
     if (!this.mounted) return;
     this.mounted = false;
     this.root.hidden = true;
-    this.dockMarker.after(this.panel);
-    this.panel.setAttribute('role', 'tabpanel');
-    this.panel.setAttribute('aria-labelledby', 'container-manager-tab');
-    this.panel.hidden = document.getElementById('container-manager-tab')!.getAttribute('aria-selected') !== 'true';
+    this.panel.hidden = true;
   }
 
   setHosts(hosts: ContainerHost[]): void {
@@ -125,7 +115,6 @@ export class ContainerPage {
     const busy = this.preparing || this.state === 'disconnecting';
     this.select.disabled = active || busy || !this.hosts.length;
     this.connectButton.disabled = busy || (!active && !this.select.value);
-    this.get<HTMLButtonElement>('#containers-terminal').disabled = this.preparing;
     this.connectButton.classList.toggle('primary', !active);
     this.connectButton.textContent = this.preparing ? '读取凭据中…'
       : this.state === 'connecting' ? '取消连接'

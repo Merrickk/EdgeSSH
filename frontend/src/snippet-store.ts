@@ -25,6 +25,7 @@ export class SnippetStore extends EventTarget {
   private notify(): void { this.dispatchEvent(new Event('change')); }
 
   load(force = false): Promise<void> {
+    console.log('DBG store.load', force, 'pending=', !!this.pending, 'loaded=', this.loaded);
     if (this.pending) return this.pending;
     if (this.loaded && !force) return Promise.resolve();
     const generation = this.generation;
@@ -34,7 +35,9 @@ export class SnippetStore extends EventTarget {
         const { snippets } = await api<{ snippets: Snippet[] }>('/api/snippets');
         // 登出会清空内存，不能让先前尚未结束的请求重新显示私人片段。
         if (generation !== this.generation) return;
-        this.items = snippets; this.loaded = true;
+        // 响应体缺字段时不能把 items 写成 undefined，否则渲染端直接崩。
+        this.items = Array.isArray(snippets) ? snippets : [];
+        this.loaded = true;
       } catch (error) {
         if (generation === this.generation) this.error = error instanceof Error ? error.message : '片段加载失败，请重试。';
       } finally {

@@ -4,7 +4,7 @@ import { connectFiles, fileFixture } from './file-fixture';
 test('快捷工具栏与命令编辑器通过同一终端输入通道发送', async ({ page }, testInfo) => {
   const fixture = await fileFixture(page);
   await connectFiles(page);
-  await page.locator('#files-terminal').click();
+  await page.locator('#workbench-tab-terminal').click();
   await expect(page.locator('#terminal-tools')).toBeVisible();
 
   const inputCalls = () => fixture.calls.filter((call) => call.type === 'input');
@@ -44,9 +44,7 @@ test('快捷工具栏与命令编辑器通过同一终端输入通道发送', as
 test('移动端工具栏横向滚动且页面不产生横向溢出', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'mobile', '只核验移动端横向滚动布局');
   await fileFixture(page, { noHosts: true });
-  await page.locator('#files-terminal').click();
-  await page.locator('#panel-toggle').click();
-  await page.waitForTimeout(300);
+  await page.locator('#workbench-tab-terminal').click();
   await expect(page.locator('#terminal-tools')).toBeVisible();
   const scrollState = await page.locator('.terminal-key-scroll').evaluate((element) => ({
     clientWidth: element.clientWidth,

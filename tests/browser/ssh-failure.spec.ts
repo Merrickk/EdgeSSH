@@ -54,23 +54,19 @@ test('initial SSH connection failure before ready never triggers auto-reconnect 
   await expect(page.locator('#files-connection-state')).not.toHaveText('SSH 已连接');
   await page.waitForTimeout(1400);
   expect(sockets.length).toBe(1);
-  await page.locator('#files-terminal').click();
-  await expect(page.locator('body')).toHaveAttribute('data-view', 'workspace');
-  await expect(page.locator('#event-log')).toBeVisible();
+  await page.locator('#workbench-tab-terminal').click();
+  await expect(page.locator('body')).toHaveAttribute('data-view', 'workbench');
   await expect(page.locator('#event-log')).toContainText('Cloudflare Tunnel WebSocket handshake failed (HTTP 502)');
-  await expect(page.locator('#dock-collapse')).toBeVisible();
+  // 日志是终局面板内的折叠区块：失败时自动展开，也可用工具栏开关手动控制。
+  await expect(page.locator('#event-toggle')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.locator('#event-log-close')).toBeVisible();
-  // Dismiss the connection drawer opened on error before interacting with the workspace dock
-  await page.keyboard.press('Escape');
-  // Verify user can collapse event log and restore terminal space via close button
+  // 失败时连接抽屉会自动收起，这里直接操作日志浮层即可。
+  // 关闭按钮收起日志，工具栏开关可再次展开，Esc 也能收起。
   await page.locator('#event-log-close').click();
   await expect(page.locator('#event-log-container')).toBeHidden();
-  await expect(page.locator('#dock-collapse')).toBeHidden();
-  await expect(page.locator('.terminal-card')).not.toHaveClass(/workspace-panel-open/);
-  // Verify user can open again and collapse via Escape key
+  await expect(page.locator('#event-toggle')).toHaveAttribute('aria-expanded', 'false');
   await page.locator('#event-toggle').click();
   await expect(page.locator('#event-log-container')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.locator('#event-log-container')).toBeHidden();
-  await expect(page.locator('.terminal-card')).not.toHaveClass(/workspace-panel-open/);
 });

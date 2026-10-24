@@ -1,25 +1,5 @@
-/* 文件页沿用总览的白橙主题；局部映射共享面板令牌，不改变终端侧栏的紧凑布局。 */
-body[data-view='files'] { height: auto; min-height: 100%; overflow-y: auto; background: var(--home-bg); }
-/* 令牌挂在 body 上：预览 / 属性 / 编辑器对话框被移到 body 末尾，
-   脱离 .files-page 后仍要沿用白橙主题，而不是工作台的暗色变量。 */
-body[data-view='files'] {
-  --surface: var(--home-surface);
-  --surface-2: var(--home-bg);
-  --surface-3: var(--home-line);
-  --panel: var(--home-surface);
-  --border: var(--home-line);
-  --border-soft: var(--home-line);
-  --text: var(--home-ink);
-  --muted: var(--home-muted);
-  --muted-2: var(--home-muted);
-  --accent: var(--home-accent-hover);
-  --accent-dim: var(--home-accent-soft);
-  --danger: var(--home-danger);
-  --danger-dim: var(--home-accent-soft);
-  --warning: var(--home-accent-hover);
-  --sans: var(--home-font);
-  --mono: var(--home-mono);
-}
+/* 文件页令牌：预览 / 属性 / 编辑器对话框被移到 body 末尾，
+   脱离 .files-page 后仍要沿用白橙主题，令牌由 .workbench 提供。 */
 
 .files-page {
   min-width: 0; width: 100%; max-width: 1700px; margin-inline: auto;
@@ -122,11 +102,13 @@ body[data-view='files'] .home-account { margin-left: auto; }
   .files-connection-meta > span:last-child { max-width: 65%; }
   .files-browser-heading { padding: 14px 12px; }
   .files-browser-heading > span { font-size: 10px; }
-  /* 窄屏恢复两行：路径一行、操作一行，避免 nowrap 把工具栏撑出面板。 */
-  .files-page .file-toolbar { flex-wrap: wrap; padding: 12px; }
+  /* 窄屏两行：路径一行、操作一行；操作按钮收成两排以省出列表高度。 */
+  .files-page .file-toolbar { flex-wrap: wrap; gap: 6px; padding: 8px 10px; }
   .files-page .file-path-field { flex-basis: 100%; max-width: none; }
-  .files-page .file-path-field input { font-size: 16px; height: 44px; }
-  .files-page .file-actions { flex: 1 1 auto; flex-wrap: wrap; }
+  .files-page .file-path-field input { font-size: 16px; height: 40px; }
+  .files-page .file-actions { flex: 1 1 auto; flex-wrap: wrap; gap: 5px; }
+  #dashboard .files-page .file-action { min-width: 40px; height: 40px; }
+  #dashboard .files-page .file-action-wide { padding-inline: 9px; font-size: 12px; }
   #dashboard .files-page .file-action { min-width: 44px; height: 44px; }
   #dashboard .files-page .file-action-wide { padding-inline: 10px; }
   .files-page .file-action-separator { display: none; }

@@ -3,11 +3,12 @@ import { fileFixture } from './file-fixture';
 
 test.describe.configure({ mode: 'serial' });
 
-/** 打开独立容器页并连接主机。 */
+/** 打开统一工作台的容器面板并连接主机。 */
 async function openContainers(page: import('@playwright/test').Page, id = 'alpha') {
   await page.locator('#rail-overview').click();
   await page.locator('#rail-containers').click();
-  await expect(page.locator('#containers-heading')).toBeVisible();
+  await expect(page.locator('#workbench-title')).toHaveText('容器');
+  await expect(page.locator('#workbench-tab-containers')).toHaveAttribute('aria-selected', 'true');
   await page.locator('#containers-host').selectOption(id);
   await page.locator('#containers-connect').click();
 }

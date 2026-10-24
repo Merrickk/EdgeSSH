@@ -1,47 +1,47 @@
 import { test, expect } from '@playwright/test';
 import { connectFiles, fileFixture } from './file-fixture';
 
-/** 打开工作台文件面板并等待分割动画结束。 */
+/** 打开工作台文件面板。 */
 async function openDockFiles(page: import('@playwright/test').Page) {
-  await page.locator('#files-terminal').click();
-  await page.locator('#file-manager-tab').click();
+  await page.locator('#rail-overview').click();
+  await page.locator('#rail-files').click();
   await expect(page.locator('#file-manager-panel')).toBeVisible();
-  await page.waitForTimeout(350);
 }
 
-test('工作台面板可拖拽缩放、最大化并记忆比例', async ({ page }, testInfo) => {
-  await fileFixture(page);
+test('工作台三个面板可切换且终局面板常驻', async ({ page }, testInfo) => {
+  const fixture = await fileFixture(page);
   await connectFiles(page);
-  await openDockFiles(page);
-  const dock = page.locator('#workspace-dock');
-  const before = (await dock.boundingBox())!;
-  const handle = (await page.locator('#dock-resize').boundingBox())!;
-  const dragUp = testInfo.project.name === 'mobile' ? 70 : 180;
-  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(handle.x + handle.width / 2, handle.y - dragUp, { steps: 8 });
-  await page.mouse.up();
-  await page.waitForTimeout(350);
-  const after = (await dock.boundingBox())!;
-  expect(after.height).toBeGreaterThan(before.height + dragUp - 30);
-  if (testInfo.project.name === 'desktop') {
-    expect(await page.evaluate(() => localStorage.getItem('edgessh.dock-ratio'))).not.toBeNull();
-  }
+  await expect(page.locator('#workbench-title')).toHaveText('文件');
 
-  await page.locator('#dock-maximize').click();
-  await expect(page.locator('#terminal-card')).toHaveClass(/dock-maximized/);
-  await expect(page.locator('#dock-maximize')).toHaveAttribute('aria-pressed', 'true');
-  await page.waitForTimeout(350);
-  expect((await dock.boundingBox())!.height).toBeGreaterThan(after.height + 40);
+  // 标签切换：标题、面板可见性、aria 状态同步更新。
+  await page.locator('#workbench-tab-containers').click();
+  await expect(page.locator('#workbench-title')).toHaveText('容器');
+  await expect(page.locator('#workbench-panel-containers')).toBeVisible();
+  await expect(page.locator('#workbench-panel-files')).toBeHidden();
+  await expect(page.locator('#workbench-tab-containers')).toHaveAttribute('aria-selected', 'true');
 
-  // 键盘同样可以调整：End 最大化，Enter 复位。
-  await page.locator('#dock-maximize').click();
-  await page.locator('#dock-resize').focus();
+  await page.locator('#workbench-tab-terminal').click();
+  await expect(page.locator('#workbench-title')).toHaveText('终端');
+  await expect(page.locator('#workbench-panel-terminal')).toBeVisible();
+  await expect(page.locator('#workbench-panel-files')).toBeHidden();
+  await expect(page.locator('#workbench-panel-containers')).toBeHidden();
+
+  await page.locator('#workbench-tab-files').click();
+  await expect(page.locator('#workbench-panel-files')).toBeVisible();
+  // 三个通道都只有一个：切换面板没有重连，终端保持后台连接。
+  expect(fixture.sshSockets).toHaveLength(1);
+  expect(fixture.sftpSockets).toHaveLength(1);
+  expect(fixture.containerSockets).toHaveLength(1);
+  await expect(page.locator('#files-connection-state')).toHaveText('SSH 已连接');
+
+  // 键盘同样可以切换：方向键在三个标签间循环。
+  await page.locator('#workbench-tab-files').focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#workbench-title')).toHaveText('容器');
   await page.keyboard.press('End');
-  await expect(page.locator('#terminal-card')).toHaveClass(/dock-maximized/);
-  await page.keyboard.press('Enter');
-  await expect(page.locator('#terminal-card')).not.toHaveClass(/dock-maximized/);
-  await expect(page.locator('#dock-resize')).toHaveAttribute('aria-valuenow', /\d+/);
+  await expect(page.locator('#workbench-title')).toHaveText('终端');
+  await page.keyboard.press('Home');
+  await expect(page.locator('#workbench-title')).toHaveText('文件');
 });
 
 test('行内操作菜单打开操作面板并复用重命名协议', async ({ page }, testInfo) => {
@@ -91,8 +91,9 @@ test('窄屏目录树抽屉可开合且不遮挡工具栏', async ({ page }, tes
   await expect(page.locator('#file-tree-scrim')).toBeVisible();
   const tree = (await page.locator('#file-tree').boundingBox())!;
   expect(tree.width).toBeGreaterThan(100);
-  // 点击抽屉右侧的遮罩关闭，而不是树本身。
-  await page.locator('#file-tree-scrim').click({ position: { x: 325, y: 200 } });
+  // 点击抽屉右侧的遮罩关闭，而不是树本身；坐标取面板内的空白处。
+  const scrim = (await page.locator('#file-tree-scrim').boundingBox())!;
+  await page.mouse.click(scrim.x + scrim.width - 8, scrim.y + scrim.height / 2);
   await expect(panel).not.toHaveClass(/tree-open/);
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
 });

@@ -8,7 +8,6 @@ export type FileConnectionState = 'idle' | 'connecting' | 'connected' | 'disconn
 interface FilePageActions {
   connect(host: CloudHost): Promise<void>;
   disconnect(): void;
-  openTerminal(): void;
 }
 
 const folderIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M3 9h18"/></svg>';
@@ -16,7 +15,6 @@ const folderIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a
 /** 页面只负责主机选择和布局；移动同一个面板，避免为同一 SSH 会话重复附着 SFTP。 */
 export class FilePage {
   readonly root = document.createElement('main');
-  private readonly dockMarker = document.createComment('shared-file-manager');
   private readonly select: HTMLSelectElement;
   private readonly connectButton: HTMLButtonElement;
   private hosts: CloudHost[] = [];
@@ -27,15 +25,9 @@ export class FilePage {
   private activeTarget: { id?: string; label: string } | null = null;
 
   constructor(private readonly panel: HTMLElement, private readonly actions: FilePageActions, private readonly manager: FileManager) {
-    panel.before(this.dockMarker);
     this.root.className = 'files-page';
     this.root.hidden = true;
     this.root.innerHTML = `
-      <header class="files-heading">
-        <div><p class="home-eyebrow">REMOTE FILES</p><h1 id="files-heading" tabindex="-1">文件管理</h1>
-          <p>在服务器之间切换，让每一份文件井然有序。</p></div>
-        <button class="home-button" id="files-terminal" type="button">打开 SSH 终端 ↗</button>
-      </header>
       <section class="files-connection" aria-label="文件管理连接">
         <span class="files-host-icon">${folderIcon}</span>
         <label class="files-host-field" for="files-host"><span>目标主机</span>
@@ -56,7 +48,6 @@ export class FilePage {
     this.connectButton = this.get<HTMLButtonElement>('#files-connect');
     this.select.addEventListener('change', () => this.renderConnection());
     this.connectButton.addEventListener('click', () => void this.toggleConnection());
-    this.get('#files-terminal').addEventListener('click', () => this.actions.openTerminal());
   }
 
   private get<T extends HTMLElement = HTMLElement>(selector: string): T {
@@ -66,11 +57,13 @@ export class FilePage {
   show(): void {
     this.mounted = true;
     this.root.hidden = false;
-    this.get('.files-panel-slot').append(this.panel);
+    // 面板只搬一次：重复移动会让已附着的 SFTP / 列表状态错位。
+    if (this.panel.parentElement !== this.get('.files-panel-slot')) {
+      this.get('.files-panel-slot').append(this.panel);
+    }
     this.panel.hidden = false;
     this.panel.setAttribute('role', 'region');
-    this.panel.setAttribute('aria-labelledby', 'files-heading');
-    this.get('#files-heading').focus();
+    this.panel.setAttribute('aria-labelledby', 'workbench-title');
     void this.mountList();
   }
 
@@ -98,18 +91,16 @@ export class FilePage {
     }
   }
 
+  /** 只隐藏页面，不卸载列表：切回面板时保留滚动位置与选中项。 */
   hide(): void {
     if (!this.mounted) return;
     this.mounted = false;
+    this.root.hidden = true;
+    this.panel.hidden = true;
     this.list?.destroy();
     this.list = null;
     this.panel.querySelector<HTMLTableElement>('.file-table')!.hidden = false;
     this.manager.setListView(null);
-    this.root.hidden = true;
-    this.dockMarker.after(this.panel);
-    this.panel.setAttribute('role', 'tabpanel');
-    this.panel.setAttribute('aria-labelledby', 'file-manager-tab');
-    this.panel.hidden = document.getElementById('file-manager-tab')!.getAttribute('aria-selected') !== 'true';
   }
 
   setHosts(hosts: CloudHost[]): void {
@@ -157,7 +148,6 @@ export class FilePage {
     const busy = this.preparing || this.state === 'disconnecting';
     this.select.disabled = active || busy || !this.hosts.length;
     this.connectButton.disabled = busy || (!active && !this.select.value);
-    this.get<HTMLButtonElement>('#files-terminal').disabled = this.preparing;
     this.connectButton.classList.toggle('primary', !active);
     this.connectButton.textContent = this.preparing ? '读取凭据中…'
       : this.state === 'connecting' ? '取消连接'
