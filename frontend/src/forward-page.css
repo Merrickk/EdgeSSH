@@ -1,5 +1,5 @@
 body[data-view='forward'] { overflow-y: auto; background: var(--home-bg); }
-.forward-page { min-width: 0; width: 100%; max-width: 1240px; margin-inline: auto; padding: 14px 28px 16px; }
+.forward-page { min-width: 0; width: 100%; max-width: 1700px; margin-inline: auto; padding: 14px 28px 16px; }
 .forward-page .home-section-heading { align-items: center; margin-bottom: 16px; }
 .forward-page .home-section-heading h1 { margin: 0; font-size: 24px; font-weight: 700; line-height: 1.25; }
 #dashboard .forward-new { min-height: 42px; }

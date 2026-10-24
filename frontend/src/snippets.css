@@ -23,7 +23,7 @@ body[data-view='snippets'] { overflow-y: auto; background: var(--home-bg); }
   color: var(--snip-accent); background: var(--snip-accent-soft); font-weight: 600;
 }
 .snippet-symbol { color: var(--snip-accent); font: 700 20px var(--mono); white-space: nowrap; }
-.snippet-page { min-width: 0; padding: 14px 28px 16px; width: 100%; max-width: 1450px; margin-inline: auto; }
+.snippet-page { min-width: 0; padding: 14px 28px 16px; width: 100%; max-width: 1700px; margin-inline: auto; }
 .snippet-page-heading { display: flex; align-items: center; gap: 18px; margin-bottom: 14px; }
 .snippet-open-terminal { margin-left: auto; white-space: nowrap; }
 .snippet-page-heading > .snippet-symbol { display: grid; place-items: center; width: 64px; height: 64px; background: var(--snip-accent-soft); border-radius: 16px; font-size: 26px; flex-shrink: 0; }

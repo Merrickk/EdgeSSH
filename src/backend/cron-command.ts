@@ -70,6 +70,18 @@ export function fromBase64(b64: string): string {
 }
 
 /**
+ * 判断是否为 Linux 系统 crontab 自带的标准模板指引注释（如 # m h dom mon dow command 等），
+ * 避免把系统语法说明行误当成用户的任务名称。
+ */
+function isGenericCrontabHeader(comment: string): boolean {
+  const norm = comment.toLowerCase().trim();
+  if (!norm) return true;
+  if (/\bm\s+h\s+dom\s+mon\s+dow(\s+command)?\b/i.test(norm)) return true;
+  if (/^(edit this file|each task to run|for more information see|for example|minute\s+hour)/i.test(norm)) return true;
+  return false;
+}
+
+/**
  * 解析用户 crontab 文本为结构化的 CronTask 列表。
  * 同时兼顾 EdgeSSH 自身元数据注释与用户原有的第三方 crontab 记录。
  */
@@ -111,9 +123,12 @@ export function parseCrontab(raw: string): CronTask[] {
       continue;
     }
 
-    // 2. 识别普通注释，作为后一行任务的候选名称
+    // 2. 识别普通注释，过滤掉标准模板头部语法说明
     if (line.startsWith('#') && !line.startsWith(DISABLED_PREFIX)) {
-      prevComment = line.replace(/^#+\s*/, '').trim();
+      const comment = line.replace(/^#+\s*/, '').trim();
+      if (!isGenericCrontabHeader(comment)) {
+        prevComment = comment;
+      }
       continue;
     }
 
@@ -126,7 +141,7 @@ export function parseCrontab(raw: string): CronTask[] {
     if (!parsed) continue;
 
     const id = pendingMeta?.id || `cron-${tasks.length + 1}`;
-    const name = pendingMeta?.name || prevComment || `任务 #${tasks.length + 1}`;
+    const name = pendingMeta?.name || prevComment || parsed.command.slice(0, 48);
     const taskType = pendingMeta?.type || (parsed.command.includes('.sh') ? 'script' : 'command');
     const enabled = pendingMeta?.enabled !== undefined ? pendingMeta.enabled : !isDisabled;
 

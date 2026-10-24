@@ -54,7 +54,7 @@ test('容器升级智能识别类型并支持一键添加到计划任务', async
 
   // 手动切换为 Git 源码更新模式
   await page.locator('input[name="containerUpgradeMode"][value="compose_git"]').check();
-  await expect(page.locator('#container-upgrade-command')).toHaveValue('cd /opt/myapp && git pull && docker compose up -d --build');
+  await expect(page.locator('#container-upgrade-command')).toHaveValue('cd "/opt/web-app" && git pull && docker compose up -d --build');
 
   // 点击「一键添加到计划任务」：应自动跳转至计划任务并打开新建任务弹窗，自动填好任务名与升级命令
   await page.locator('#container-upgrade-add-cron').click();
@@ -63,7 +63,7 @@ test('容器升级智能识别类型并支持一键添加到计划任务', async
   const cronDialog = page.locator('#cron-task-dialog');
   await expect(cronDialog).toBeVisible();
   await expect(page.locator('#cron-task-name')).toHaveValue('定时升级: web-nginx');
-  await expect(page.locator('#cron-command-input')).toHaveValue('cd /opt/myapp && git pull && docker compose up -d --build');
+  await expect(page.locator('#cron-command-input')).toHaveValue('cd "/opt/web-app" && git pull && docker compose up -d --build');
   await expect(page.locator('#cron-task-schedule')).toHaveValue('0 3 * * 0');
 
   await page.locator('#cron-dialog-cancel').click();

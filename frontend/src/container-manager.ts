@@ -255,6 +255,14 @@ export class ContainerManager {
   private activeSubtab: 'containers' | 'images' = 'containers';
   private imageSearch = '';
   private upgradeTarget: ContainerEntry | null = null;
+  private detectedUpgrade: {
+    workingDir: string;
+    image: string;
+    name: string;
+    isCompose: boolean;
+    recommendedMode: string;
+    recommendedCommand: string;
+  } | null = null;
   private pendingActions = new Map<string, PendingAction>();
   private actionResolvers = new Map<string, (res: { ok: boolean; stdout: string; stderr: string }) => void>();
   private logTarget: string | null = null;
@@ -781,9 +789,18 @@ export class ContainerManager {
     if (this.elements.upgradeImage) this.elements.upgradeImage.textContent = entry.image;
     if (this.elements.upgradeTypeBadge) this.elements.upgradeTypeBadge.textContent = '分析中…';
     if (this.elements.upgradeHint) this.elements.upgradeHint.textContent = '正在获取容器详细信息…';
+    const defaultCmd = `docker pull ${entry.image} && docker restart ${entry.name}`;
     if (this.elements.upgradeCommand) {
-      this.elements.upgradeCommand.value = `docker pull ${entry.image} && docker restart ${entry.name}`;
+      this.elements.upgradeCommand.value = defaultCmd;
     }
+    this.detectedUpgrade = {
+      workingDir: '',
+      image: entry.image,
+      name: entry.name,
+      isCompose: false,
+      recommendedMode: 'image_pull',
+      recommendedCommand: defaultCmd,
+    };
 
     if (!dialog.open) dialog.showModal();
 
@@ -795,22 +812,52 @@ export class ContainerManager {
         try { inspectData = JSON.parse(res.stdout); } catch { /* ignore */ }
         const item = Array.isArray(inspectData) ? inspectData[0] : inspectData;
         const labels: Record<string, string> = item?.Config?.Labels ?? {};
-        const workingDir = labels['com.docker.compose.project.working_dir']
-          || labels['com.docker.compose.project.config_files']?.slice(0, labels['com.docker.compose.project.config_files']?.lastIndexOf('/'));
+        
+        let workingDir = labels['com.docker.compose.project.working_dir'] || '';
+        if (!workingDir && labels['com.docker.compose.project.config_files']) {
+          const cfg = labels['com.docker.compose.project.config_files'].split(',')[0].trim();
+          const lastSlash = cfg.lastIndexOf('/');
+          if (lastSlash > 0) workingDir = cfg.slice(0, lastSlash);
+        }
 
-        if (workingDir) {
-          const isBuild = labels['com.docker.compose.service'] && (!entry.image || entry.image.includes(entry.name));
-          if (isBuild) {
-            this.setUpgradeModeDisplay('compose_git', `cd "${workingDir}" && git pull && docker compose up -d --build`, 'Docker Compose (Git 源码更新)');
-          } else {
-            this.setUpgradeModeDisplay('compose_pull', `cd "${workingDir}" && docker compose pull && docker compose up -d`, 'Docker Compose (镜像更新)');
-          }
+        const isCompose = Boolean(workingDir || labels['com.docker.compose.project'] || labels['com.docker.compose.service']);
+
+        if (isCompose && workingDir) {
+          const cmd = `cd "${workingDir}" && docker compose pull && docker compose up -d`;
+          this.detectedUpgrade = {
+            workingDir,
+            image: entry.image,
+            name: entry.name,
+            isCompose: true,
+            recommendedMode: 'compose_pull',
+            recommendedCommand: cmd,
+          };
+          this.setUpgradeModeDisplay('compose_pull', cmd, 'Docker Compose (镜像更新)');
+        } else if (isCompose) {
+          const cmd = `docker compose pull && docker compose up -d`;
+          this.detectedUpgrade = {
+            workingDir: '',
+            image: entry.image,
+            name: entry.name,
+            isCompose: true,
+            recommendedMode: 'compose_pull',
+            recommendedCommand: cmd,
+          };
+          this.setUpgradeModeDisplay('compose_pull', cmd, 'Docker Compose (项目更新)');
         } else {
-          this.setUpgradeModeDisplay('image_pull', `docker pull ${entry.image} && docker restart ${entry.name}`, '单容器 (镜像更新)');
+          this.detectedUpgrade = {
+            workingDir: '',
+            image: entry.image,
+            name: entry.name,
+            isCompose: false,
+            recommendedMode: 'image_pull',
+            recommendedCommand: defaultCmd,
+          };
+          this.setUpgradeModeDisplay('image_pull', defaultCmd, '单容器 (镜像更新)');
         }
       }
     } catch {
-      this.setUpgradeModeDisplay('image_pull', `docker pull ${entry.image} && docker restart ${entry.name}`, '单容器 (镜像更新)');
+      this.setUpgradeModeDisplay('image_pull', defaultCmd, '单容器 (镜像更新)');
     }
   }
 
@@ -825,11 +872,21 @@ export class ContainerManager {
   private updateUpgradeCommandFromMode(mode: string): void {
     const entry = this.upgradeTarget;
     if (!entry) return;
-    if (mode === 'compose_git') {
-      this.elements.upgradeCommand!.value = `cd /opt/myapp && git pull && docker compose up -d --build`;
-      if (this.elements.upgradeHint) this.elements.upgradeHint.textContent = '请确保路径正确，将拉取最新 Git 代码并重新 build 启动';
+    const detected = this.detectedUpgrade;
+    const dir = detected?.workingDir ? `cd "${detected.workingDir}" && ` : '';
+
+    if (mode === 'auto') {
+      if (detected) {
+        this.elements.upgradeCommand!.value = detected.recommendedCommand;
+        if (this.elements.upgradeHint) {
+          this.elements.upgradeHint.textContent = `已恢复推荐升级命令：${detected.recommendedMode === 'compose_pull' ? 'Docker Compose' : '单容器'}`;
+        }
+      }
+    } else if (mode === 'compose_git') {
+      this.elements.upgradeCommand!.value = `${dir}git pull && docker compose up -d --build`;
+      if (this.elements.upgradeHint) this.elements.upgradeHint.textContent = '将拉取 Git 仓库最新代码并重新构建镜像启动';
     } else if (mode === 'compose_pull') {
-      this.elements.upgradeCommand!.value = `cd /opt/myapp && docker compose pull && docker compose up -d`;
+      this.elements.upgradeCommand!.value = `${dir}docker compose pull && docker compose up -d`;
       if (this.elements.upgradeHint) this.elements.upgradeHint.textContent = '将拉取 Compose 服务的最新镜像并重启';
     } else if (mode === 'image_pull') {
       this.elements.upgradeCommand!.value = `docker pull ${entry.image} && docker restart ${entry.name}`;

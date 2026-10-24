@@ -125,7 +125,7 @@ export class CronPage {
     badge.textContent = labels[this.state] || '未连接';
     badge.dataset.state = this.state;
     this.get('#cron-host-hint').textContent = active
-      ? '与工作台共用会话 · 切换主机前请先断开'
+      ? '与终端共用会话 · 切换主机前请先断开'
       : '使用已保存的 SSH 凭据安全连接';
   }
 

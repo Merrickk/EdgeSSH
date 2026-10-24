@@ -341,13 +341,20 @@ export class CronManager {
       nameTd.className = 'cron-name-cell';
       const nameTitle = document.createElement('strong');
       nameTitle.textContent = task.name;
-      const nameSub = document.createElement('code');
-      nameSub.textContent = task.schedule;
-      nameTd.append(nameTitle, nameSub);
+      nameTitle.title = task.name;
+      nameTd.append(nameTitle);
 
       // 2. 执行周期
       const schedTd = document.createElement('td');
-      schedTd.textContent = explainCron(task.schedule);
+      schedTd.className = 'cron-sched-cell';
+      const schedWrap = document.createElement('div');
+      schedWrap.className = 'cron-sched-wrap';
+      const schedText = document.createElement('span');
+      schedText.textContent = explainCron(task.schedule);
+      const schedCode = document.createElement('code');
+      schedCode.textContent = task.schedule;
+      schedWrap.append(schedText, schedCode);
+      schedTd.append(schedWrap);
       schedTd.title = task.schedule;
 
       // 3. 任务类型
@@ -366,15 +373,20 @@ export class CronManager {
       // 5. 状态
       const statusTd = document.createElement('td');
       statusTd.className = 'cron-status-cell';
+      const statusWrap = document.createElement('div');
+      statusWrap.className = 'cron-status-wrap';
       const dot = document.createElement('i');
       dot.className = `cron-dot is-${task.enabled ? 'enabled' : 'disabled'}`;
       const statusText = document.createElement('span');
       statusText.textContent = task.enabled ? '已启用' : '已停用';
-      statusTd.append(dot, statusText);
+      statusWrap.append(dot, statusText);
+      statusTd.append(statusWrap);
 
       // 6. 操作按钮
       const actionsTd = document.createElement('td');
       actionsTd.className = 'cron-actions-cell';
+      const actionsWrap = document.createElement('div');
+      actionsWrap.className = 'cron-actions-wrap';
 
       const runBtn = document.createElement('button');
       runBtn.type = 'button';
@@ -405,7 +417,8 @@ export class CronManager {
       delBtn.dataset.cronId = task.id;
       delBtn.textContent = '删除';
 
-      actionsTd.append(runBtn, editBtn, toggleBtn, delBtn);
+      actionsWrap.append(runBtn, editBtn, toggleBtn, delBtn);
+      actionsTd.append(actionsWrap);
       row.append(nameTd, schedTd, typeTd, cmdTd, statusTd, actionsTd);
       body.append(row);
     }
