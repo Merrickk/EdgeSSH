@@ -68,12 +68,27 @@ body[data-view='dashboard'] { overflow-y: auto; background: var(--home-bg); }
 .host-filters { display: flex; gap: 16px; flex-wrap: wrap; border-bottom: 1px solid var(--home-line); margin-bottom: 12px; }
 #dashboard .host-filters button { padding: 12px 2px; color: var(--home-muted); background: none; font-size: 12px; white-space: nowrap; border-bottom: 3px solid transparent; }
 #dashboard .host-filters button.active { color: var(--home-ink); border-color: var(--home-accent); }
-.host-list { min-height: 282px; max-height: calc(100dvh - 320px); overflow-y: auto; scrollbar-width: thin; }
-.host-group-heading { font-size: 12px; font-weight: 650; margin: 18px 0 9px; color: var(--home-muted); }
-/* 主机卡片：单行排布图标、名称、位置与操作；没有探据所以不放指标带。 */
-.host-card { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; border: 1px solid var(--home-line); border-radius: 10px; margin-bottom: 12px; padding: 13px 16px; background: var(--home-surface); transition: border-color 140ms ease, box-shadow 140ms ease; }
+.host-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-content: start;
+  min-height: 282px;
+  max-height: calc(100dvh - 320px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.host-group-heading {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  font-weight: 650;
+  margin: 12px 0 2px;
+  color: var(--home-muted);
+}
+/* 主机卡片：2栏排列，单行排布图标、名称、位置与操作 */
+.host-card { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; border: 1px solid var(--home-line); border-radius: 10px; margin-bottom: 0; padding: 13px 16px; background: var(--home-surface); transition: border-color 140ms ease, box-shadow 140ms ease; }
 .host-card:hover { border-color: color-mix(in srgb, var(--home-accent) 45%, var(--home-line)); box-shadow: 0 6px 20px var(--home-shadow); }
-.host-card-body { display: grid; flex: 1 1 auto; grid-template-columns: 40px minmax(0, 1fr) 190px; align-items: center; gap: 12px; min-width: 0; }
+.host-card-body { display: grid; flex: 1 1 auto; grid-template-columns: 40px minmax(0, 1fr) 140px; align-items: center; gap: 12px; min-width: 0; }
 .host-card-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .host-card-actions .connect-host { margin-right: auto; }
 
@@ -104,7 +119,12 @@ body[data-view='dashboard'] { overflow-y: auto; background: var(--home-bg); }
 .host-list-footer { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--home-line); padding-top: 10px; margin-top: 12px; font-size: 11px; color: var(--home-muted); }
 #dashboard .home-text-button { background: none; color: var(--home-muted); padding: 8px 0; font-size: 12px; white-space: nowrap; }
 #dashboard .home-text-button:hover { color: var(--home-accent-hover); }
-.home-empty { text-align: center; padding: 70px 16px; color: var(--home-muted); }
+.home-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 70px 16px;
+  color: var(--home-muted);
+}
 .home-empty svg { display: block; margin: 0 auto 16px; color: var(--home-accent); }
 .home-empty strong { display: block; color: var(--home-ink); font-size: 16px; font-weight: 500; }
 .home-empty p { font-size: 12px; margin: 8px 0 0; }
@@ -171,6 +191,7 @@ body[data-view='dashboard'] { overflow-y: auto; background: var(--home-bg); }
 }
 @media (max-width: 950px) {
   .home-main-grid { grid-template-columns: minmax(0, 1fr); }
+  .host-list { grid-template-columns: minmax(0, 1fr); }
   .hosts-pane { padding-right: 0; }
   .globe-pane { margin-top: 30px; padding: 0; border-left: 0; border-top: 1px solid var(--home-line); }
   .globe-heading { top: 22px; left: 16px; }

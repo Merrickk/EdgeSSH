@@ -149,10 +149,9 @@ test('浮窗在调整尺寸后仍可触达，并适配浅色及减少动态效�
   await connectFiles(page);
   await page.locator('#rail-terminal').click();
   const panel = page.locator('#snippet-panel');
-  const initiallyCollapsed = testInfo.project.name === 'mobile';
-  if (initiallyCollapsed) await expect(panel.locator('#snippet-panel-body')).toBeHidden();
-  else await expect(panel.locator('#snippet-panel-body')).toBeVisible();
-  if (initiallyCollapsed) await panel.getByRole('button', { name: '展开代码片段' }).click();
+  await expect(panel.locator('#snippet-panel-body')).toBeHidden();
+  await panel.getByRole('button', { name: '展开代码片段' }).click();
+  await expect(panel.locator('#snippet-panel-body')).toBeVisible();
   await panel.getByRole('button', { name: '移动代码片段窗口' }).focus();
   for (let i = 0; i < 8; i++) await page.keyboard.press('ArrowDown');
   await page.setViewportSize({ width: 667, height: 375 });
