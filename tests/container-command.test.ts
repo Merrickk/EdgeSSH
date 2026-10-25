@@ -89,6 +89,7 @@ test('容器动作支持 inspect、pull、prune_images 和安全 upgrade', () =>
 });
 
 test('容器动作命令白名单', () => {
+  assert.equal(buildContainerActionCommand('rm', 'web-nginx', undefined), 'docker rm -f web-nginx');
   assert.equal(buildContainerActionCommand('stop', 'web-nginx', undefined), 'docker stop web-nginx');
   assert.equal(buildContainerActionCommand('restart', 'db-1', undefined), 'docker restart db-1');
   assert.equal(buildContainerActionCommand('rmi', 'nginx:1.25', undefined), 'docker rmi nginx:1.25');

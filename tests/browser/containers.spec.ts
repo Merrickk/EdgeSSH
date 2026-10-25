@@ -148,18 +148,23 @@ test('容器启停与删除走白名单命令', async ({ page }) => {
     expect.objectContaining({ action: 'stop', target: 'abc123def456' }),
   ]));
 
-  // 删除需要确认，取消则不发送命令。
+  // 删除需要确认，取消则不发送命令。弹窗标题与描述中展示容器名称而不是裸 ID。
   await page.locator('#container-table-body tr').filter({ hasText: 'db-postgres' }).locator('[data-container-action="rm"]').click();
   await expect(page.locator('#container-confirm-dialog')).toBeVisible();
+  await expect(page.locator('#container-confirm-title')).toContainText('db-postgres');
   await page.locator('#container-confirm-reject').click();
   await expect(page.locator('#container-confirm-dialog')).toBeHidden();
   expect(fixture.containerCalls.filter((call) => call.action === 'rm')).toHaveLength(0);
 
-  await page.locator('#container-table-body tr').filter({ hasText: 'db-postgres' }).locator('[data-container-action="rm"]').click();
+  // 运行中的容器直接点击删除，弹窗提示将自动停止并强制删除
+  await page.locator('#container-table-body tr').filter({ hasText: 'web-nginx' }).locator('[data-container-action="rm"]').click();
+  await expect(page.locator('#container-confirm-dialog')).toBeVisible();
+  await expect(page.locator('#container-confirm-title')).toContainText('web-nginx');
+  await expect(page.locator('#container-confirm-description')).toContainText('自动停止并强制删除');
   await page.locator('#container-confirm-accept').click();
   await expect.poll(() => fixture.containerCalls.map((call) => call.action)).toContain('rm');
   expect(fixture.containerCalls).toEqual(expect.arrayContaining([
-    expect.objectContaining({ action: 'rm', target: 'aaa111bbb222' }),
+    expect.objectContaining({ action: 'rm', target: 'abc123def456' }),
   ]));
 });
 

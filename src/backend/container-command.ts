@@ -238,6 +238,7 @@ export function buildContainerActionCommand(
     return `docker logs --tail ${lines} ${target}`;
   }
   if (tail !== undefined) return null;
+  if (action === 'rm') return `docker rm -f ${target}`;
   if (action === 'rmi') return `docker rmi ${target}`;
   if (action === 'pull') return `docker pull ${target}`;
   if (action === 'inspect') return `docker inspect ${target}`;

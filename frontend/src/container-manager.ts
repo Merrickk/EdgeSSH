@@ -579,9 +579,10 @@ export class ContainerManager {
       return;
     }
     const label = containerActionLabel(pending.action, this.localize);
+    const targetDisplayName = this.containers.find((c) => c.id === pending.target)?.name || pending.target;
     this.options.onToast?.(
-      ok ? `${label}：${pending.target}` : `${label}失败：${stderr || stdout || pending.target}`,
-      ok ? `${label}: ${pending.target}` : `${label} failed: ${stderr || stdout || pending.target}`,
+      ok ? `${label}：${targetDisplayName}` : `${label}失败：${stderr || stdout || targetDisplayName}`,
+      ok ? `${label}: ${targetDisplayName}` : `${label} failed: ${stderr || stdout || targetDisplayName}`,
       ok ? 'info' : 'error',
     );
   }
@@ -980,12 +981,20 @@ export class ContainerManager {
       return;
     }
     if (action === 'rm') {
+      const entry = this.containers.find((c) => c.id === target);
+      const name = entry?.name || target;
+      const isRunning = entry?.state === 'running';
       const confirmed = await this.confirm({
-        title: { zh: '删除容器', en: 'Remove container' },
-        description: {
-          zh: `将执行 docker rm ${target}。容器必须已停止，运行中的容器不会被删除。此操作无法撤销。`,
-          en: `Runs docker rm ${target}. The container must be stopped; running containers are kept. This cannot be undone.`,
-        },
+        title: { zh: `删除容器: ${name}`, en: `Remove container: ${name}` },
+        description: isRunning
+          ? {
+            zh: `确定删除容器 "${name}" 吗？该容器当前处于运行状态，将自动停止并强制删除（docker rm -f），此操作不可撤销。`,
+            en: `Remove container "${name}"? It is currently running and will be stopped and removed automatically. This cannot be undone.`,
+          }
+          : {
+            zh: `确定删除容器 "${name}" 吗？此操作不可撤销。`,
+            en: `Remove container "${name}"? This cannot be undone.`,
+          },
       });
       if (!confirmed) return;
     }

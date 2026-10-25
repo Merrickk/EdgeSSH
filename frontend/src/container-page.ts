@@ -54,7 +54,7 @@ export class ContainerPage {
       <section class="containers-browser" aria-label="远程容器">
         <div class="containers-panel-slot"></div>
       </section>
-      <footer class="containers-footer"><span>启停 / 重启 / 暂停直接生效 · 删除需确认且只能删除已停止的容器</span>
+      <footer class="containers-footer"><span>启停 / 重启 / 暂停直接生效 · 删除需确认（运行中容器将自动停止并强制删除）</span>
         <span>采样周期 5 秒 · 日志默认 200 行</span></footer>`;
     this.select = this.get<HTMLSelectElement>('#containers-host');
     this.connectButton = this.get<HTMLButtonElement>('#containers-connect');
