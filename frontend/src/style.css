@@ -2995,6 +2995,16 @@ body[data-view='files'] .file-dialog::backdrop { background: rgba(17, 24, 39, 0.
   cursor: pointer;
   color: #111827 !important;
 }
+/* 单选框配色统一为主题橙，避免浏览器默认蓝色 */
+.container-upgrade-mode-label input[type='radio'],
+.cron-type-toggle input[type='radio'] {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin: 0;
+  accent-color: var(--home-accent, #f4511e);
+  cursor: pointer;
+}
 
 .container-upgrade-cmd-label {
   display: flex;

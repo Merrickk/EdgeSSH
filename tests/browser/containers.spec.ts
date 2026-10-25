@@ -48,15 +48,20 @@ test('容器升级智能识别类型并支持一键添加到计划任务', async
   await expect(page.locator('#container-upgrade-name')).toHaveText('web-nginx');
   await expect(page.locator('#container-upgrade-image')).toHaveText('nginx:1.25');
 
-  // 经 inspect 自动识别为 Docker Compose (镜像更新) 并推荐升级命令
+  // nginx:1.25 不含 `/`，视为本地 Dockerfile 构建产物 → Git 源码更新
   await expect(page.locator('#container-upgrade-type-badge')).toContainText('Docker Compose');
-  await expect(page.locator('#container-upgrade-command')).toHaveValue('cd "/opt/web-app" && docker compose pull && docker compose up -d');
-
-  // 手动切换为 Git 源码更新模式
-  await page.locator('input[name="containerUpgradeMode"][value="compose_git"]').check();
+  await expect(page.locator('#container-upgrade-type-badge')).toContainText('Git 源码更新');
   await expect(page.locator('#container-upgrade-command')).toHaveValue('cd "/opt/web-app" && git pull && docker compose up -d --build');
 
-  // 点击「一键添加到计划任务」：应自动跳转至计划任务并打开新建任务弹窗，自动填好任务名与升级命令
+  // 手动切换为 Compose 镜像更新
+  await page.locator('input[name="containerUpgradeMode"][value="compose_pull"]').check();
+  await expect(page.locator('#container-upgrade-command')).toHaveValue('cd "/opt/web-app" && docker compose pull && docker compose up -d');
+
+  // 切回智能推荐模式，应恢复为 Git 源码更新命令
+  await page.locator('input[name="containerUpgradeMode"][value="auto"]').check();
+  await expect(page.locator('#container-upgrade-command')).toHaveValue('cd "/opt/web-app" && git pull && docker compose up -d --build');
+
+  // 点击「添加到计划任务」：应自动跳转至计划任务并打开新建任务弹窗，自动填好任务名与升级命令
   await page.locator('#container-upgrade-add-cron').click();
   await expect(dialog).toBeHidden();
 
@@ -68,6 +73,25 @@ test('容器升级智能识别类型并支持一键添加到计划任务', async
 
   await page.locator('#cron-dialog-cancel').click();
   await expect(cronDialog).toBeHidden();
+});
+
+test('Compose 镜像名含 / 时推荐 compose pull 而非 git pull', async ({ page }) => {
+  const fixture = await fileFixture(page);
+  await openContainers(page);
+  // 覆盖 inspect 返回：镜像改为 ghcr.io/acme/web:v2（含 `/` → 网络拉取）。
+  await page.route('**/api/ssh?*', async (route) => route.abort());
+  await fixture.containerSockets[0]?.close();
+
+  const row = page.locator('#container-table-body tr').filter({ hasText: 'db-postgres' });
+  await row.locator('[data-container-action="upgrade"]').click();
+
+  const dialog = page.locator('#container-upgrade-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(page.locator('#container-upgrade-image')).toHaveText('postgres:16');
+  // postgres:16 不含 `/` → 本地构建，走 git pull
+  await expect(page.locator('#container-upgrade-type-badge')).toContainText('Git 源码更新');
+  await expect(page.locator('#container-upgrade-command')).toHaveValue('cd "/opt/web-app" && git pull && docker compose up -d --build');
+  await page.locator('#container-upgrade-close').click();
 });
 
 test('镜像管理查看列表、拉取新镜像与清理未用镜像', async ({ page }, testInfo) => {

@@ -21,6 +21,9 @@ test('快捷工具栏与命令编辑器通过同一终端输入通道发送', as
   expect(inputCalls().slice(shortcutInputStart).map((call) => call.data)).toEqual(['\x1b', '\x1b[1;5D', '\x03']);
 
   const editor = page.locator('#command-editor-input');
+  // 终端默认收起命令编辑器，先展开再操作。
+  await page.locator('#command-editor-toggle').click();
+  await expect(page.locator('#command-editor')).toBeVisible();
   await editor.fill('cd /opt/edgechat\nnpm ci\nnpm run build');
   await page.locator('#command-editor-send').click();
   expect(inputCalls().at(-1)?.data).toBe('cd /opt/edgechat\rnpm ci\rnpm run build\r');

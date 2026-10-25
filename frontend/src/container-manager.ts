@@ -822,36 +822,41 @@ export class ContainerManager {
 
         const isCompose = Boolean(workingDir || labels['com.docker.compose.project'] || labels['com.docker.compose.service']);
 
+        // Compose 升级策略：镜像名含 `/` 说明来自 Docker Hub / ghcr.io / 私有仓库等
+        // 网络地址，走 `compose pull`；否则视为本地 Dockerfile 构建产物，走 `git pull` 重新 build。
+        const isRemoteImage = entry.image.includes('/');
+
         if (isCompose && workingDir) {
-          const cmd = `cd "${workingDir}" && docker compose pull && docker compose up -d`;
-          this.detectedUpgrade = {
-            workingDir,
-            image: entry.image,
-            name: entry.name,
-            isCompose: true,
-            recommendedMode: 'compose_pull',
-            recommendedCommand: cmd,
-          };
-          this.setUpgradeModeDisplay('compose_pull', cmd, 'Docker Compose (镜像更新)');
+          if (isRemoteImage) {
+            const cmd = `cd "${workingDir}" && docker compose pull && docker compose up -d`;
+            this.detectedUpgrade = {
+              workingDir, image: entry.image, name: entry.name, isCompose: true,
+              recommendedMode: 'compose_pull', recommendedCommand: cmd,
+            };
+            this.setUpgradeModeDisplay('compose_pull', cmd, 'Docker Compose (镜像更新)');
+          } else {
+            const cmd = `cd "${workingDir}" && git pull && docker compose up -d --build`;
+            this.detectedUpgrade = {
+              workingDir, image: entry.image, name: entry.name, isCompose: true,
+              recommendedMode: 'compose_git', recommendedCommand: cmd,
+            };
+            this.setUpgradeModeDisplay('compose_git', cmd, 'Docker Compose (Git 源码更新)');
+          }
         } else if (isCompose) {
-          const cmd = `docker compose pull && docker compose up -d`;
+          // 有 Compose 标签但取不到工作目录，退化为不带 cd 的命令。
+          const cmd = isRemoteImage
+            ? `docker compose pull && docker compose up -d`
+            : `git pull && docker compose up -d --build`;
+          const mode = isRemoteImage ? 'compose_pull' : 'compose_git';
           this.detectedUpgrade = {
-            workingDir: '',
-            image: entry.image,
-            name: entry.name,
-            isCompose: true,
-            recommendedMode: 'compose_pull',
-            recommendedCommand: cmd,
+            workingDir: '', image: entry.image, name: entry.name, isCompose: true,
+            recommendedMode: mode, recommendedCommand: cmd,
           };
-          this.setUpgradeModeDisplay('compose_pull', cmd, 'Docker Compose (项目更新)');
+          this.setUpgradeModeDisplay(mode, cmd, isRemoteImage ? 'Docker Compose (镜像更新)' : 'Docker Compose (Git 源码更新)');
         } else {
           this.detectedUpgrade = {
-            workingDir: '',
-            image: entry.image,
-            name: entry.name,
-            isCompose: false,
-            recommendedMode: 'image_pull',
-            recommendedCommand: defaultCmd,
+            workingDir: '', image: entry.image, name: entry.name, isCompose: false,
+            recommendedMode: 'image_pull', recommendedCommand: defaultCmd,
           };
           this.setUpgradeModeDisplay('image_pull', defaultCmd, '单容器 (镜像更新)');
         }
@@ -879,7 +884,12 @@ export class ContainerManager {
       if (detected) {
         this.elements.upgradeCommand!.value = detected.recommendedCommand;
         if (this.elements.upgradeHint) {
-          this.elements.upgradeHint.textContent = `已恢复推荐升级命令：${detected.recommendedMode === 'compose_pull' ? 'Docker Compose' : '单容器'}`;
+          const strategyLabel = detected.recommendedMode === 'compose_git'
+            ? 'Docker Compose (Git 源码更新)'
+            : detected.recommendedMode === 'compose_pull'
+              ? 'Docker Compose (镜像更新)'
+              : '单容器 (镜像更新)';
+          this.elements.upgradeHint.textContent = `已恢复推荐升级策略：${strategyLabel}`;
         }
       }
     } else if (mode === 'compose_git') {

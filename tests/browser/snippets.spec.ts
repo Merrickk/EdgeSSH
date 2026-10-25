@@ -62,11 +62,13 @@ test('终端浮窗折叠、拖动与键盘复位；填入草稿而不执行，�
   if (await expand.count()) await expand.click();
   await expect(panel.locator('.snippet-card')).toHaveCount(10);
   await panel.getByRole('button', { name: '使用 查看磁盘空间', exact: true }).click();
+  // 使用片段会自动展开命令编辑器；先收起片段浮窗避免遮挡命令按钮。
+  await expect(page.locator('#command-editor')).toBeVisible();
+  if (await panel.getByRole('button', { name: '收起代码片段' }).count()) await panel.getByRole('button', { name: '收起代码片段' }).click();
   await expect(page.locator('#command-editor-input')).toHaveValue('df -h');
   expect(files.calls.filter((call) => call.type === 'input')).toHaveLength(0);
   await page.locator('#command-editor-send').click();
   await expect.poll(() => files.calls.filter((call) => call.type === 'input').at(-1)?.data).toBe('df -h\r');
-  if (await panel.getByRole('button', { name: '收起代码片段' }).count()) await panel.getByRole('button', { name: '收起代码片段' }).click();
   await expect(page.locator('#snippet-panel-body')).toBeHidden();
   const handle = panel.getByRole('button', { name: '移动代码片段窗口' });
   const before = (await panel.boundingBox())!;
@@ -133,9 +135,12 @@ test('多行片段保留换行且不直接发送；取消覆盖保留旧草稿�
   const panel = page.locator('#snippet-panel');
   if (await panel.getByRole('button', { name: '展开代码片段' }).count()) await panel.getByRole('button', { name: '展开代码片段' }).click();
   await panel.getByRole('button', { name: '使用 多行脚本', exact: true }).click();
+  // 使用片段会自动展开命令编辑器。
+  await expect(page.locator('#command-editor')).toBeVisible();
   await expect(page.locator('#command-editor-input')).toHaveValue('echo a\n# 注释\necho b');
-  if (await panel.getByRole('button', { name: '展开代码片段' }).count()) await panel.getByRole('button', { name: '展开代码片段' }).click();
   page.once('dialog', (dialog) => dialog.dismiss());
+  // 移动端使用片段后面板会自动收起，重新展开后再点第二个片段。
+  if (await panel.getByRole('button', { name: '展开代码片段' }).count()) await panel.getByRole('button', { name: '展开代码片段' }).click();
   await panel.getByRole('button', { name: '使用 查看当前目录', exact: true }).click();
   await expect(page.locator('#command-editor-input')).toHaveValue('echo a\n# 注释\necho b');
   expect(files.calls.filter((call) => call.type === 'input')).toHaveLength(0);
