@@ -98,6 +98,9 @@ export class ContainerPage {
 
   setConnection(state: ContainerPage['state'], hostId?: string): void {
     this.state = state;
+    if (hostId && this.hosts.some((h) => h.id === hostId)) {
+      this.select.value = hostId;
+    }
     this.renderConnection();
   }
 

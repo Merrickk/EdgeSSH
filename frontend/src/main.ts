@@ -1766,8 +1766,11 @@ function handleSshReconnectLog(entry: ReconnectLogEntry): void {
       `正在重连 SSH（${entry.attempt}/${entry.maxAttempts}）…`,
       `Reconnecting SSH (${entry.attempt}/${entry.maxAttempts})…`,
     ));
+    setState('connecting');
+    toast(bilingual(`网络异常，正在尝试第 ${entry.attempt} 次自动重连…`, `Connection lost. Reconnecting (${entry.attempt}/${entry.maxAttempts})…`), 'info');
   } else if (entry.event === 'reconnect_success') {
     event(bilingual('SSH 重连成功。', 'SSH reconnected successfully.'), 'connect');
+    toast(bilingual('SSH 自动重连成功！', 'SSH reconnected successfully!'), 'info');
   }
 }
 
