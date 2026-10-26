@@ -255,10 +255,31 @@ body[data-view='cron'] .home-account { margin-left: auto; }
 }
 
 .cron-run-body {
-  padding: 12px 16px; background: var(--surface-2); min-height: 140px; max-height: calc(100dvh - 240px); overflow: auto;
+  padding: 12px 16px;
+  background: var(--home-surface, #ffffff);
+  color: var(--home-ink, #111827);
+  min-height: 140px;
+  max-height: calc(100dvh - 240px);
+  overflow: auto;
+  scrollbar-color: var(--home-line, #cbd5e1) transparent;
+  scrollbar-width: thin;
+}
+.cron-run-body::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.cron-run-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cron-run-body::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+.cron-run-body::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }
 .cron-run-body pre {
-  margin: 0; font: 12px/1.6 var(--mono); color: var(--text); white-space: pre-wrap; word-break: break-all;
+  margin: 0; font: 12px/1.6 var(--mono); color: var(--home-ink, #111827); white-space: pre-wrap; word-break: break-all;
 }
 
 @media (max-width: 600px) {

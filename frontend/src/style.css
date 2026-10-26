@@ -3170,39 +3170,57 @@ body[data-view='files'] .file-dialog::backdrop { background: rgba(17, 24, 39, 0.
   align-items: center;
   gap: 12px;
   padding: 8px 16px;
-  border-bottom: 1px solid var(--border-soft);
-  background: var(--surface-2);
-  color: var(--muted);
+  border-bottom: 1px solid var(--home-line, #e9ecf1);
+  background: var(--home-bg, #fafbfd);
+  color: var(--home-muted, #667085);
   font: 11px/1.5 var(--mono);
 }
 
-.container-log-meta code { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.container-log-meta code { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--home-ink, #111827); }
 
 .container-log-tail { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 
 .container-log-tail select {
-  height: 26px;
-  padding: 0 6px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--text);
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--home-line, #e9ecf1);
+  border-radius: 6px;
+  background: var(--home-surface, #ffffff);
+  color: var(--home-ink, #111827);
   font: inherit;
 }
 
-.container-log-meta .secondary-button { flex: 0 0 auto; min-height: 26px; padding: 0 10px; font-size: 11px; }
+.container-log-meta .secondary-button { flex: 0 0 auto; min-height: 28px; padding: 0 10px; font-size: 11px; }
 
 .container-log-body {
   min-height: 140px;
   max-height: calc(100dvh - 260px);
   overflow: auto;
   padding: 12px 16px;
-  background: var(--surface-2);
+  background: var(--home-surface, #ffffff);
+  color: var(--home-ink, #111827);
+  scrollbar-color: var(--home-line, #cbd5e1) transparent;
+  scrollbar-width: thin;
+}
+
+.container-log-body::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.container-log-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.container-log-body::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+.container-log-body::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }
 
 .container-log-body pre {
   margin: 0;
-  color: var(--text);
+  color: var(--home-ink, #111827);
   font: 11px/1.6 var(--mono);
   tab-size: 4;
   white-space: pre;
