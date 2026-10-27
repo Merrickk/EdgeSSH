@@ -1341,6 +1341,9 @@ function markReady(message = bilingual('交互式 Shell 已就绪', 'Interactive
   startTimers();
   updateConnectionStatus(messageTranslation(message));
   filePage?.setMessage('');
+  containerPage?.setMessage('');
+  cronPage?.setMessage('');
+  terminalPage?.setMessage('');
   event(message, 'ready');
   if (currentInitialCommand && !initialCommandSent) {
     initialCommandSent = true;

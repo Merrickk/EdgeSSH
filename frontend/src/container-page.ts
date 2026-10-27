@@ -101,6 +101,9 @@ export class ContainerPage {
     if (hostId && this.hosts.some((h) => h.id === hostId)) {
       this.select.value = hostId;
     }
+    if (state === 'connected' || state === 'idle') {
+      this.setMessage('');
+    }
     this.renderConnection();
   }
 
