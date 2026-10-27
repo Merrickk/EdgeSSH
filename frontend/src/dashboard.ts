@@ -260,7 +260,6 @@ export class Dashboard {
    */
   showOverview(): void {
     if (!this.actions.files.confirmLeave()) return;
-    if (!this.isHome) this.actions.leaveWorkspace();
     this.hideAllPagesExcept(null);
     this.isHome = true;
     this.root.hidden = false;
@@ -347,7 +346,6 @@ export class Dashboard {
 
   returnHome(): void {
     if (!this.actions.files.confirmLeave()) return;
-    this.actions.leaveWorkspace();
     this.showOverview();
     void this.refresh();
   }

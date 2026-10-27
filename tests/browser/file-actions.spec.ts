@@ -30,10 +30,20 @@ test('独立页面通过侧边栏平滑切换且终端后台保持连接', async
   await page.locator('#rail-files').click();
   await expect(page.locator('.files-page')).toBeVisible();
 
-  // 关键断言：三个通道都只有一个实例，页面切换不打断后台连接
+  // 切到总览页面：会话必须依然在后台保持连接，绝对不能断开！
+  await page.locator('#rail-overview').click();
+  await expect(page.locator('#rail-overview')).toHaveAttribute('aria-current', 'page');
+  expect(fixture.sshSockets).toHaveLength(1);
+
+  // 从总览再切回终端，依然是 SSH 已连接状态
+  await page.locator('#rail-terminal').click();
+  await expect(page.locator('#terminal-connection-state')).toHaveText('SSH 已连接');
+
+  // 关键断言：所有通道都只有一个实例，页面切换包括切到总览均不打断后台连接
   expect(fixture.sshSockets).toHaveLength(1);
   expect(fixture.sftpSockets).toHaveLength(1);
   expect(fixture.containerSockets).toHaveLength(1);
+  await page.locator('#rail-files').click();
   await expect(page.locator('#files-connection-state')).toHaveText('SSH 已连接');
 });
 

@@ -730,7 +730,6 @@ containerManager = new ContainerManager({
   elements: collectContainerManagerElements(),
   getLanguage: () => currentLanguage,
   onError: (message) => event(message, 'container', true),
-  onStatus: (message) => event(message, 'container'),
   onToast: (zh, en, kind) => toast(bilingual(zh, en), kind),
   onAddToCron: (task) => {
     dashboard?.showCron();
@@ -742,7 +741,6 @@ cronManager = new CronManager({
   elements: collectCronManagerElements(),
   getLanguage: () => currentLanguage,
   onError: (message) => event(message, 'cron', true),
-  onStatus: (message) => event(message, 'cron'),
   onToast: (zh, en, kind) => toast(bilingual(zh, en), kind),
 });
 
@@ -1163,7 +1161,6 @@ function updateConnectionStatus(message: LocalizedMessage): void {
   currentSessionSubtitle = message;
   const text = localize(message);
   ui.sessionSubtitle.textContent = text;
-  filePage?.setMessage(text);
   if (connectionState === 'connecting') {
     const btnSpan = ui.connect.querySelector<HTMLElement>('span:last-child');
     if (btnSpan) btnSpan.textContent = text;
@@ -1232,9 +1229,12 @@ function logTerminal(message: string, isError = false): void {
 
 function event(message: string, category = 'session', error = false, alternate?: string): void {
   const eventTranslation = messageTranslation(message, alternate);
-  currentEventMessage = eventTranslation;
-  ui.eventMessage.textContent = localize(currentEventMessage);
-  ui.eventMessage.parentElement?.classList.toggle('has-error', error);
+  // 仅 SSH 终端/会话核心生命周期或错误事件才更新终端顶部的状态横幅，避免附属模块（如容器/计划任务）刷屏覆盖
+  if (category === 'session' || category === 'connect' || category === 'ready' || category === 'transport' || error) {
+    currentEventMessage = eventTranslation;
+    ui.eventMessage.textContent = localize(currentEventMessage);
+    ui.eventMessage.parentElement?.classList.toggle('has-error', error);
+  }
   const line = document.createElement('div');
   line.className = `event-line${error ? ' error' : ''}`;
   line.dataset.category = category;
