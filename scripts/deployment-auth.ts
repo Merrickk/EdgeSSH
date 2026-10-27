@@ -24,22 +24,28 @@ export async function prepareAuthentication(
     const canRetain = options.previousProvider === 'cloudflare'
       && requiredAuthSecrets('cloudflare').every((name) => options.existingSecrets?.has(name));
     if (canRetain) {
-      try {
-        const response = await fetcher(`https://${hostname}/api/auth/me`, {
-          redirect: 'manual', signal: AbortSignal.timeout(30_000),
-        });
-        const location = response.headers.get('Location');
-        const target = location ? new URL(location, `https://${hostname}`) : null;
-        if (target && (target.hostname.endsWith('.cloudflareaccess.com')
-          || target.pathname.startsWith('/cdn-cgi/access/'))) {
-          console.log('已确认当前入口仍由 Cloudflare Access 保护，保留现有认证 Secret。');
-          return { secrets: {} };
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const response = await fetcher(`https://${hostname}/api/auth/me`, {
+            redirect: 'manual', signal: AbortSignal.timeout(30_000),
+          });
+          const location = response.headers.get('Location');
+          const target = location ? new URL(location, `https://${hostname}`) : null;
+          if (target && (target.hostname.endsWith('.cloudflareaccess.com')
+            || target.pathname.startsWith('/cdn-cgi/access/'))) {
+            console.log('已确认当前入口仍由 Cloudflare Access 保护，保留现有认证 Secret。');
+            return { secrets: {} };
+          }
+        } catch (error) {
+          if (attempt === 3) {
+            console.warn(`无法探测入口 Access 状态（${error instanceof Error ? error.message : String(error)}），尝试从 Zero Trust API 确认应用配置…`);
+          } else {
+            await new Promise((r) => setTimeout(r, 2000 * attempt));
+          }
         }
-      } catch {
-        throw new Error('无法确认当前入口的 Cloudflare Access 登录是否可用，请检查域名后重试。');
       }
     }
-    // 首次启用、切回 Access 或现有配置不完整时，必须从对应应用刷新配置。
+    // 首次启用、切回 Access、探测异常或现有配置不完整时，从对应应用刷新配置。
     return { secrets: await ensureAccess(api, settings, hostname) };
   }
   // GitHub 新部署完全不调用 Zero Trust API。旧域名若仍在 Access 后面，明确停止，

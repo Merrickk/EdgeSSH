@@ -9,12 +9,18 @@ export async function verifyGithubDeployment(
 ): Promise<void> {
   const origin = `https://${hostname}`;
   async function probe(path: string): Promise<Response> {
-    try {
-      return await fetcher(`${origin}${path}`, { redirect: 'manual', signal: AbortSignal.timeout(30_000) });
-    } catch {
-      // 不把网络异常的原始内容或带 OAuth state 的响应头写入部署日志。
-      throw new Error(`GitHub 登录入口验收无法连接 ${path}，请检查正式域名的 DNS、证书及网络后重跑 Deploy。`);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await fetcher(`${origin}${path}`, { redirect: 'manual', signal: AbortSignal.timeout(30_000) });
+      } catch (err) {
+        if (attempt === 3) {
+          // 不把网络异常的原始内容或带 OAuth state 的响应头写入部署日志。
+          throw new Error(`GitHub 登录入口验收无法连接 ${path}（尝试 3 次失败），请检查正式域名的 DNS、证书及网络后重跑 Deploy。`);
+        }
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
     }
+    throw new Error(`GitHub 登录入口验收无法连接 ${path}`);
   }
   const login = await probe('/auth/login');
   const location = login.headers.get('Location');

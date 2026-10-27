@@ -111,6 +111,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: Error) => {
-  console.error(error.message);
+  console.error(error.stack || error.message);
   process.exitCode = 1;
 });
