@@ -2464,8 +2464,12 @@ async function initialize(): Promise<void> {
       await connect();
     },
     leaveWorkspace: () => {
-      disconnect(bilingual('已返回主机总览', 'Returned to host dashboard'));
-      clearCredentials();
+      // 保持长连核心逻辑：若已成功建立连接（connected），切回总览保留后台常驻连接，绝不断开；
+      // 若尚在读取凭据（historyPasswordLoading）或连接握手中（connecting），用户离开表示放弃未决的连接。
+      if (historyPasswordLoading || connectionState === 'connecting') {
+        invalidateHistoryPasswordLoad();
+        disconnect(bilingual('已取消连接', 'Connection cancelled'));
+      }
     },
   });
   await dashboard.start();
