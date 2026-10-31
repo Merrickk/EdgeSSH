@@ -236,7 +236,19 @@ export class SSHSessionDO implements DurableObject {
         await session.handleClientMessage(message);
         return;
       }
-      if (this.pendingConnections.has(ws)) throw new Error('An SSH connection is already being initialized');
+      const pendingConnection = this.pendingConnections.get(ws);
+      if (pendingConnection) {
+        // 握手期间的杂散消息（如终端 resize）：静默忽略而不是报错。
+        // 前端从总览跳转到终端页时，页面显示会触发 xterm resize，
+        // 此时 connect 握手仍在 TCP/Tunnel 阶段，resize 不是协议错误。
+        if (typeof message === 'string' && message.length <= 256) {
+          try {
+            const stray = JSON.parse(message) as { type?: unknown };
+            if (stray?.type === 'resize') return;
+          } catch { /* fall through to the strict error below */ }
+        }
+        throw new Error('An SSH connection is already being initialized');
+      }
       if (typeof message !== 'string' || message.length > 160 * 1024) throw new Error('The first WebSocket message must be a connect JSON object');
       let decoded: unknown;
       try { decoded = JSON.parse(message); } catch { throw new Error('Invalid connect JSON'); }

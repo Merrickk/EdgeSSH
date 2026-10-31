@@ -1257,7 +1257,9 @@ function fitTerminal(send = true): void {
   resizeFrame = requestAnimationFrame(() => {
     try {
       fitAddon.fit();
-      if (send && socket?.readyState === WebSocket.OPEN) {
+      // 只在 SSH 会话真正就绪后才发送 resize；握手期间发送会被后端视为
+      // "connect 未完成前的杂散消息"而直接拒绝整个连接。
+      if (send && socket?.readyState === WebSocket.OPEN && connectionState === 'connected') {
         socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
       }
     } catch {
