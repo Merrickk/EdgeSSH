@@ -2460,8 +2460,11 @@ async function initialize(): Promise<void> {
       return profiles;
     },
     connect: async (host) => {
-      await applyProfile(host);
-      await connect();
+      // 总览发起的连接由 connectHost 内部负责切换到终端页；此处只需应用凭据并发起连接。
+      const loading = applyProfile(host);
+      const selectionGeneration = historyPasswordLoadGeneration;
+      await loading;
+      if (selectionGeneration === historyPasswordLoadGeneration) await connect();
     },
     leaveWorkspace: () => {
       // 保持长连核心逻辑：若已成功建立连接（connected），切回总览保留后台常驻连接，绝不断开；
