@@ -158,6 +158,16 @@ export class SSHSessionDO implements DurableObject {
     const client = pair[0];
     const server = pair[1];
     this.state.acceptWebSocket(server);
+    // Hibernation auto-response: the client pings every 25s. Without an
+    // auto-response pair the DO is woken for every ping (keeps a live SSH
+    // session pinned in memory, good) — but when the phone sits in the OS
+    // file picker the page is frozen and cannot ping; the runtime may then
+    // evict the DO, killing the SSH TCP socket. Registering the pair lets
+    // the runtime answer pings while hibernated AND keeps the session
+    // eligible for hibernation instead of hard eviction.
+    this.state.setWebSocketAutoResponse(
+      new WebSocketRequestResponsePair(JSON.stringify({ type: 'ping' }), JSON.stringify({ type: 'pong' })),
+    );
     server.serializeAttachment({ role: 'main', phase: 'waiting' } satisfies MainAttachment);
     this.registerSFTPAttachToken(sftpAttachToken, sftpAttachUrl, server);
     this.registerProcessAttachToken(processAttachToken, processAttachUrl, server);
