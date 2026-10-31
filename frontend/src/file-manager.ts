@@ -168,8 +168,8 @@ const DISCONNECTED_CHANNEL: LocalizedText = {
 };
 
 // Auto-reconnect for the file manager after an unexpected drop.
-const RECONNECT_MAX_ATTEMPTS = 3;
-const RECONNECT_DELAYS: readonly number[] = [1000, 2000, 4000];
+const RECONNECT_MAX_ATTEMPTS = 8;
+const RECONNECT_DELAYS: readonly number[] = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000, 30_000, 30_000];
 
 function requiredElement<T extends Element>(root: ParentNode, id: string): T {
   const node = root.querySelector<T>(`#${id}`);
@@ -328,6 +328,7 @@ export class FileManager {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   /** Current reconnect attempt count (0 = no attempt). */
   private reconnectAttempts = 0;
+  private reconnectGaveUp = false;
   /** Pending tree-view directory fetch promises, keyed by `tree-` prefixed requestId. */
   private treeLists = new Map<string, {
     resolve: (value: { path: string; entries: SFTPEntry[]; isTruncated: boolean }) => void;
@@ -370,6 +371,23 @@ export class FileManager {
     this.loadSortPreference();
     this.syncSortControls();
     this.renderDisconnected();
+    // 移动端切后台（文件选择器等）会冻结重连计时器并可能耗尽重试额度；
+    // 回前台时若仍想要连接则立即恢复重连。
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!this.wantConnection) return;
+      if (this.isSocketOpen()) return;
+      if (this.reconnectGaveUp) {
+        this.reconnectGaveUp = false;
+        this.reconnectAttempts = 0;
+        this.scheduleReconnect();
+        return;
+      }
+      if (this.reconnectTimer !== null) {
+        this.clearReconnectTimer();
+        this.scheduleReconnect();
+      }
+    });
   }
 
   attach(url: string): void {
@@ -452,6 +470,7 @@ export class FileManager {
     this.wantConnection = false;
     this.clearReconnectTimer();
     this.reconnectAttempts = 0;
+    this.reconnectGaveUp = false;
     this.generation++;
     const socket = this.socket;
     this.socket = null;
@@ -2239,6 +2258,7 @@ export class FileManager {
       console.log(
         `[WS-Reconnect] ${new Date().toISOString()} | SFTP | give_up | attempt=${this.reconnectAttempts - 1}/${RECONNECT_MAX_ATTEMPTS}`,
       );
+      this.reconnectGaveUp = true;
       this.reconnectAttempts = 0;
       this.renderDisconnected(true, { zh: '文件管理重连失败。', en: 'File manager reconnect failed.' });
       return;

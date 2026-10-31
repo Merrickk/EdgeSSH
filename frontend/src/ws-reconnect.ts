@@ -46,8 +46,11 @@ export interface ReconnectLogEntry {
   maxAttempts?: number;
 }
 
-const DEFAULT_MAX_ATTEMPTS = 3;
-const DEFAULT_DELAYS: readonly number[] = [1000, 2000, 4000];
+const DEFAULT_MAX_ATTEMPTS = 8;
+// 1s, 2s, 4s, 8s, 15s, 30s, 30s, 30s — the long tail keeps a mobile page
+// (frozen while the OS file picker or another app is in front) retrying until
+// the user returns instead of giving up after ~7 seconds.
+const DEFAULT_DELAYS: readonly number[] = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000, 30_000, 30_000];
 
 export class WebSocketReconnectManager {
   private id: string;
@@ -59,6 +62,7 @@ export class WebSocketReconnectManager {
   private socket: WebSocket | null = null;
   private destroyed = false;
   private reconnecting = false;
+  private gaveUp = false;
   private attempt = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -99,6 +103,7 @@ export class WebSocketReconnectManager {
     this.destroyed = true;
     this.socket = null;
     this.reconnecting = false;
+    this.gaveUp = false;
     this.attempt = 0;
   }
 
@@ -166,6 +171,7 @@ export class WebSocketReconnectManager {
 
     if (this.attempt > this.maxAttempts) {
       this.reconnecting = false;
+      this.gaveUp = true;
       this.log({
         timestamp: new Date().toISOString(),
         id: this.id,
@@ -217,6 +223,7 @@ export class WebSocketReconnectManager {
       const onConnectSuccess = (): void => {
         if (this.destroyed || this.socket !== newSocket) return;
         this.reconnecting = false;
+        this.gaveUp = false;
         this.log({
           timestamp: new Date().toISOString(),
           id: this.id,
@@ -276,5 +283,26 @@ export class WebSocketReconnectManager {
       clearTimeout(this.timer);
       this.timer = null;
     }
+  }
+
+  /**
+   * Immediately retry after the page becomes visible again. Mobile browsers
+   * freeze JS timers while the page is backgrounded (OS file picker, app
+   * switch), so pending reconnect timers never fire in the background and a
+   * hidden page may exhaust its attempt budget silently. On return we clear
+   * the give-up state and reconnect right away.
+   */
+  notifyVisible(): void {
+    if (this.destroyed) return;
+    // 放弃后页面重新可见：重置放弃状态，立即再试（移动端回前台场景）。
+    if (this.gaveUp) {
+      this.gaveUp = false;
+      this.startReconnect();
+      return;
+    }
+    if (!this.reconnecting) return;
+    this.clearTimer();
+    this.attempt = 0;
+    this.tryReconnect();
   }
 }

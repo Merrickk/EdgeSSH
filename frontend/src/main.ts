@@ -1311,6 +1311,18 @@ function startTimers(): void {
     if (socket?.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify({ type: 'ping' }));
   }, PING_INTERVAL_MS);
+  // 移动端浏览器把页面切后台（如系统文件选择器）时会冻结所有 JS 定时器，
+  // WebSocket 也可能被系统掐断；回前台时立即恢复重连，不再等待退避计时。
+  document.addEventListener('visibilitychange', onVisibilityChange);
+}
+
+function onVisibilityChange(): void {
+  if (document.visibilityState !== 'visible') return;
+  if (connectionState === 'connected') return;
+  if (socket?.readyState === WebSocket.OPEN) return;
+  sshReconnectManager?.notifyVisible();
+  if (reconnectParams) return;
+  // 无重连管理器（会话已放弃）时不再自动重拨，等待用户手动连接。
 }
 
 function stopTimers(): void {
@@ -1319,6 +1331,7 @@ function stopTimers(): void {
   uptimeTimer = null;
   pingTimer = null;
   sessionStartedAt = 0;
+  document.removeEventListener('visibilitychange', onVisibilityChange);
 }
 
 function markReady(message = bilingual('交互式 Shell 已就绪', 'Interactive shell ready')): void {
