@@ -272,12 +272,58 @@ export class SFTPHandler {
     try {
       this.assertReady();
       this.validatePath(path);
-      if (directory) await this.client.rmdir(path);
-      else await this.client.removeFile(path);
+      if (path === '/' || path.trim() === '') throw new Error('禁止删除根目录');
+
+      if (directory) {
+        await this.removeDirectoryRecursive(path);
+      } else {
+        try {
+          await this.client.removeFile(path);
+        } catch {
+          // 若作为普通文件删除失败，尝试检测是否为目录并递归删除
+          await this.removeDirectoryRecursive(path);
+        }
+      }
       this.sendJSON({ type: `sftp_${operation}_result`, requestId, path, success: true });
     } catch (error) {
       this.reportError(operation, error, requestId);
     }
+  }
+
+  /** 递归删除目录及其全部子文件与子目录（等价于 rm -rf），彻底避免非空目录报错 */
+  private async removeDirectoryRecursive(dirPath: string): Promise<void> {
+    try {
+      await this.client.rmdir(dirPath);
+      return;
+    } catch {
+      // 目录非空，递归删除内部子项
+    }
+    const handle = await this.client.openDir(dirPath);
+    const subEntries: Array<{ name: string; isDir: boolean }> = [];
+    try {
+      while (true) {
+        const batch = await this.client.readDir(handle);
+        if (batch === null || batch.length === 0) break;
+        for (const entry of batch) {
+          if (entry.filename === '.' || entry.filename === '..') continue;
+          const kind = getSFTPFileKind(entry.attrs);
+          subEntries.push({ name: entry.filename, isDir: kind === 'directory' });
+        }
+      }
+    } finally {
+      await this.client.closeHandle(handle).catch(() => undefined);
+    }
+
+    for (const sub of subEntries) {
+      const subPath = dirPath.endsWith('/') ? `${dirPath}${sub.name}` : `${dirPath}/${sub.name}`;
+      if (sub.isDir) {
+        await this.removeDirectoryRecursive(subPath);
+      } else {
+        await this.client.removeFile(subPath);
+      }
+    }
+
+    await this.client.rmdir(dirPath);
   }
 
   async mkdir(requestId: string, path: string): Promise<void> {

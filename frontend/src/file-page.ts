@@ -46,7 +46,7 @@ export class FilePage {
         <div class="files-panel-slot"></div>
       </section>
       <footer class="files-footer"><span>双击目录进入 · 长按或点击 ⋯ 打开操作 · 文件可拖拽到面板上传</span>
-        <span>单文件 ≤ 64 MiB · 仅支持删除空目录</span></footer>`;
+        <span>单文件 ≤ 64 MiB · 支持递归删除文件夹</span></footer>`;
     this.select = this.get<HTMLSelectElement>('#files-host');
     this.connectButton = this.get<HTMLButtonElement>('#files-connect');
     this.select.addEventListener('change', () => this.renderConnection());
