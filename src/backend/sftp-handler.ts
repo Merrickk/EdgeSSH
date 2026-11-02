@@ -221,8 +221,18 @@ export class SFTPHandler {
       return;
     }
     try {
-      await this.client.writeFile(upload.handle, upload.received, data);
-      upload.received += data.length;
+      // SFTP RFC draft 规范保证所有服务器至少支持 32768 (32KB) 单次写入包。
+      // 将数据按不超过 32KB 的分段写入远程服务器，彻底避免某些服务器（如 Dropbear/AWS/旧版 OpenSSH）
+      // 因单包超过 32KB 拒绝写入的问题。
+      const WRITE_CHUNK_SIZE = 32 * 1024;
+      let offset = 0;
+      while (offset < data.length) {
+        const sliceLen = Math.min(WRITE_CHUNK_SIZE, data.length - offset);
+        const slice = data.subarray(offset, offset + sliceLen);
+        await this.client.writeFile(upload.handle, upload.received, slice);
+        upload.received += sliceLen;
+        offset += sliceLen;
+      }
       this.sendJSON({ type: 'sftp_upload_progress', requestId: upload.requestId, loaded: upload.received, total: upload.size });
     } catch (error) {
       const requestId = upload.requestId;

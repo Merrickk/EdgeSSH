@@ -6,7 +6,7 @@ export const MAX_SFTP_FILE_SIZE = 64 * 1024 * 1024;
 const MAX_PREVIEW_TEXT_SIZE = 1024 * 1024;
 const MAX_PREVIEW_IMAGE_SIZE = 8 * 1024 * 1024;
 const PREVIEWABLE_KINDS = new Set(['image', 'document', 'script', 'config']);
-export const SFTP_UPLOAD_CHUNK_SIZE = 64 * 1024;
+export const SFTP_UPLOAD_CHUNK_SIZE = 32 * 1024;
 
 /** 文本编辑器一次可读入 / 写回的最大体积，超过就只能下载。 */
 export const MAX_EDIT_TEXT_SIZE = 2 * 1024 * 1024;
@@ -1898,19 +1898,33 @@ export class FileManager {
         en: `Delete ${count} selected items? This cannot be undone.`,
       }));
       if (!confirmed) return;
-      this.setStatus({
-        zh: `正在批量删除 ${count} 个项目…`,
-        en: `Deleting ${count} items…`,
-      });
+
+      this.showProgress('delete', `(0/${count})`, 0);
+      let successCount = 0;
       for (let i = 0; i < selected.length; i++) {
         const entry = selected[i];
-        const path = joinPath(this.cwd, entry.name);
-        const operation = entry.type === 'directory' ? 'rmdir' : 'delete';
-        const requestId = this.createRequest(operation, path, { suppressRefresh: i < selected.length - 1 });
-        this.send({ type: operation === 'rmdir' ? 'sftp_rmdir' : 'sftp_delete', requestId, path });
+        const current = i + 1;
+        const percent = Math.round((current / count) * 100);
+        this.showProgress('delete', `(${current}/${count}) · ${entry.name}`, percent);
+        this.setStatus({
+          zh: `正在删除 (${current}/${count})：${entry.name}…`,
+          en: `Deleting (${current}/${count}): ${entry.name}…`,
+        });
+        try {
+          await this.deletePath(joinPath(this.cwd, entry.name), entry.type === 'directory');
+          successCount++;
+        } catch {
+          // 单个项目删除失败不中断其余项目继续删除
+        }
       }
+      this.hideProgress();
       this.clearSelection();
-      this.onToast?.(`已提交批量删除 ${count} 个项目`, `Batch deleting ${count} items`, 'info');
+      this.refresh();
+      this.onToast?.(
+        `批量删除完成：已删除 ${successCount} 个${successCount < count ? `，失败 ${count - successCount} 个` : ''}`,
+        `Batch delete complete: ${successCount} deleted${successCount < count ? `, ${count - successCount} failed` : ''}`,
+        successCount === count ? 'info' : 'error',
+      );
       return;
     }
 
@@ -2407,11 +2421,12 @@ export class FileManager {
     this.elements.status.textContent = this.localize(copy);
   }
 
-  private showProgress(operation: 'upload' | 'download', name: string, percent: number): void {
+  private showProgress(operation: 'upload' | 'download' | 'delete', name: string, percent: number): void {
     this.elements.progress.dataset.operation = operation;
     this.elements.progress.dataset.name = name;
     this.elements.progress.hidden = false;
-    this.elements.progressCancel.disabled = false;
+    this.elements.progressCancel.disabled = operation === 'delete';
+    this.elements.progressCancel.hidden = operation === 'delete';
     this.elements.progressBar.value = Math.max(0, Math.min(100, percent));
     this.updateProgressLanguage();
   }
@@ -2423,11 +2438,13 @@ export class FileManager {
     const name = this.elements.progress.dataset.name ?? '';
     const verb = operation === 'upload'
       ? this.localize({ zh: '上传', en: 'Uploading' })
-      : this.localize({ zh: '下载', en: 'Downloading' });
+      : operation === 'delete'
+        ? this.localize({ zh: '删除', en: 'Deleting' })
+        : this.localize({ zh: '下载', en: 'Downloading' });
     this.elements.progressLabel.textContent = transfer?.cancelling
       ? this.localize({ zh: `正在取消 ${name}…`, en: `Cancelling ${name}…` })
       : `${verb} ${name} ${Math.round(this.elements.progressBar.value)}%`;
-    this.elements.progressCancel.disabled = Boolean(transfer?.cancelling || this.uploadState?.endSent);
+    this.elements.progressCancel.disabled = Boolean(transfer?.cancelling || this.uploadState?.endSent || operation === 'delete');
     this.elements.progressCancel.textContent = transfer?.cancelling
       ? this.localize({ zh: '取消中…', en: 'Cancelling…' })
       : this.localize({ zh: '取消', en: 'Cancel' });
@@ -2438,6 +2455,7 @@ export class FileManager {
     this.elements.progressBar.value = 0;
     this.elements.progressLabel.textContent = '';
     this.elements.progressCancel.disabled = false;
+    this.elements.progressCancel.hidden = false;
     this.elements.progressCancel.textContent = this.localize({ zh: '取消', en: 'Cancel' });
     delete this.elements.progress.dataset.operation;
     delete this.elements.progress.dataset.name;

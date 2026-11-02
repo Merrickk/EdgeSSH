@@ -124,6 +124,10 @@ class Reader {
     }
   }
 
+  skipRemaining(): void {
+    this.offset = this.data.length;
+  }
+
   private require(length: number, label: string): void {
     if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) {
       throw new SFTPProtocolError(`Malformed SFTP packet: truncated or invalid ${label}`);
@@ -293,9 +297,20 @@ function parseAttrs(reader: Reader, maxExtended: number): SFTPAttrs {
 
 function parseStatus(reader: Reader, requestId: number): { code: number; description: string; language: string } {
   const code = reader.readUint32('status code');
-  const description = reader.readText('status description');
-  const language = reader.readText('status language');
-  reader.assertEnd('STATUS packet');
+  let description = '';
+  let language = '';
+  if (reader.remaining >= 4) {
+    try {
+      description = reader.readText('status description');
+      if (reader.remaining >= 4) {
+        language = reader.readText('status language');
+      }
+    } catch {
+      // 容忍非标准或截断的描述字段，不破坏会话。
+    }
+  }
+  // 某些 SFTP 服务器（如 Dropbear 或带扩展的实现）可能带有尾部扩展字节，安全排空。
+  reader.skipRemaining();
   return { code, description, language };
 }
 

@@ -230,7 +230,15 @@ export class SSHSessionDO implements DurableObject {
           return;
         }
         await sftpSession.handleSFTPClientMessage(message);
-      } catch {
+      } catch (error) {
+        console.error('SFTP client message error:', error);
+        try {
+          ws.send(JSON.stringify({
+            type: 'sftp_error',
+            operation: 'sftp',
+            message: error instanceof Error ? error.message : String(error),
+          }));
+        } catch { /* already closed */ }
         this.cleanupSFTPWebSocket(ws);
         try { ws.close(1011, 'SFTP request failed'); } catch { /* already closed */ }
       }
