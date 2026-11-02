@@ -81,6 +81,7 @@ export interface FileManagerOptions {
   prompt?: (message: string, defaultValue?: string) => string | null | Promise<string | null>;
   onError?: (message: string) => void;
   onStatus?: (message: string) => void;
+  onToast?: (zh: string, en: string, kind?: 'info' | 'error') => void;
   /** 只读模式下隐藏“编辑”入口；缺省表示可用。 */
   canEdit?: () => boolean;
 }
@@ -300,6 +301,7 @@ export class FileManager {
   private readonly promptAction: NonNullable<FileManagerOptions['prompt']>;
   private readonly onError?: FileManagerOptions['onError'];
   private readonly onStatus?: FileManagerOptions['onStatus'];
+  private readonly onToast?: FileManagerOptions['onToast'];
   private readonly bindings = new AbortController();
 
   private socket: WebSocket | null = null;
@@ -312,6 +314,7 @@ export class FileManager {
   private historyIndex = 0;
   private entries: SFTPEntry[] = [];
   private selectedIndex = -1;
+  private selectedIndices = new Set<number>();
   private listView: FileListView | null = null;
   private pending = new Map<string, PendingRequest>();
   private activeListRequest: string | null = null;
@@ -367,6 +370,7 @@ export class FileManager {
     this.promptAction = options.prompt ?? ((message, value) => window.prompt(message, value));
     this.onError = options.onError;
     this.onStatus = options.onStatus;
+    this.onToast = options.onToast;
     this.bindControls();
     this.loadSortPreference();
     this.syncSortControls();
@@ -552,8 +556,45 @@ export class FileManager {
   }
 
   selectEntry(index: number): void {
-    this.selectedIndex = this.entries[index] ? index : -1;
+    this.selectEntries(index >= 0 ? [index] : []);
+  }
+
+  selectEntries(indices: number[]): void {
+    this.selectedIndices = new Set(indices.filter((i) => this.entries[i]));
+    this.selectedIndex = indices.length > 0 && this.entries[indices[0]] ? indices[0] : -1;
     this.updateControls();
+    this.renderSelectedState();
+    if (this.listView) this.renderEntries();
+  }
+
+  clearSelection(): void {
+    this.selectedIndices.clear();
+    this.selectedIndex = -1;
+    this.updateControls();
+    this.renderSelectedState();
+    if (this.listView) this.renderEntries();
+  }
+
+  private selectedEntry(): SFTPEntry | null {
+    return this.selectedIndex >= 0 ? this.entries[this.selectedIndex] ?? null : null;
+  }
+
+  private selectedEntries(): SFTPEntry[] {
+    const list: SFTPEntry[] = [];
+    for (const idx of this.selectedIndices) {
+      const entry = this.entries[idx];
+      if (entry) list.push(entry);
+    }
+    return list;
+  }
+
+  private renderSelectedState(): void {
+    for (const row of this.elements.tableBody.rows) {
+      const rowIndex = Number(row.dataset.index);
+      const selected = this.selectedIndices.has(rowIndex);
+      row.setAttribute('aria-selected', String(selected));
+      row.tabIndex = selected ? 0 : -1;
+    }
   }
 
   activateIndex(index: number): void {
@@ -1573,6 +1614,7 @@ export class FileManager {
     }
     this.sourceEntries = entries;
     this.selectedIndex = -1;
+    this.selectedIndices.clear();
     this.closeActionSheet(false);
     this.elements.path.value = path;
     this.updateBreadcrumbs(path);
@@ -1615,10 +1657,12 @@ export class FileManager {
   private renderEntries(): void {
     this.elements.tableBody.replaceChildren();
     if (this.listView) {
+      const selectedIds = this.selectedEntries().map((e) => e.name);
       this.listView.render({
         chinese: this.isChinese(),
         path: this.cwd,
         selectedId: this.selectedEntry()?.name,
+        selectedIds,
         items: this.entries.map((entry, index) => ({
           id: entry.name, name: entry.name, index, entry,
           columns: [
@@ -1844,8 +1888,33 @@ export class FileManager {
   }
 
   private async deleteSelected(): Promise<void> {
-    const entry = this.selectedEntry();
-    if (!this.ready || !entry || this.hasTransfer()) return;
+    const selected = this.selectedEntries();
+    if (!this.ready || selected.length === 0 || this.hasTransfer()) return;
+
+    if (selected.length > 1) {
+      const count = selected.length;
+      const confirmed = await this.confirmAction(this.localize({
+        zh: `确定要批量删除选中的 ${count} 个项目吗？此操作无法撤销。`,
+        en: `Delete ${count} selected items? This cannot be undone.`,
+      }));
+      if (!confirmed) return;
+      this.setStatus({
+        zh: `正在批量删除 ${count} 个项目…`,
+        en: `Deleting ${count} items…`,
+      });
+      for (let i = 0; i < selected.length; i++) {
+        const entry = selected[i];
+        const path = joinPath(this.cwd, entry.name);
+        const operation = entry.type === 'directory' ? 'rmdir' : 'delete';
+        const requestId = this.createRequest(operation, path, { suppressRefresh: i < selected.length - 1 });
+        this.send({ type: operation === 'rmdir' ? 'sftp_rmdir' : 'sftp_delete', requestId, path });
+      }
+      this.clearSelection();
+      this.onToast?.(`已提交批量删除 ${count} 个项目`, `Batch deleting ${count} items`, 'info');
+      return;
+    }
+
+    const entry = selected[0];
     const confirmed = await this.confirmAction(this.localize({
       zh: `确定要删除“${entry.name}”吗？此操作无法撤销。`,
       en: `Delete “${entry.name}”? This cannot be undone.`,
@@ -1920,6 +1989,7 @@ export class FileManager {
     this.setStatus(remaining > 0
       ? { zh: `已上传 ${state.file.name}，剩余 ${remaining} 个`, en: `Uploaded ${state.file.name}, ${remaining} left in queue` }
       : { zh: `已上传 ${state.file.name}`, en: `Uploaded ${state.file.name}` });
+    this.onToast?.(`已上传 ${state.file.name}`, `Uploaded ${state.file.name}`, 'info');
     this.updateControls();
     if (remaining > 0) {
       // 队列排空后再刷新目录，避免每个文件都重新拉一次列表。
@@ -2174,10 +2244,6 @@ export class FileManager {
     return this.uploadState !== null || this.downloadState !== null;
   }
 
-  private selectedEntry(): SFTPEntry | null {
-    return this.selectedIndex >= 0 ? this.entries[this.selectedIndex] ?? null : null;
-  }
-
   private abortTransfers(updateControls: boolean): void {
     this.uploadState = null;
     this.downloadState = null;
@@ -2196,6 +2262,7 @@ export class FileManager {
 
   private updateControls(): void {
     const selected = this.selectedEntry();
+    const count = this.selectedIndices.size;
     const idle = this.ready && !this.hasTransfer() && !this.uploadConfirmationPending;
     this.elements.path.disabled = !this.ready;
     this.elements.back.disabled = !this.ready || this.historyIndex <= 0;
@@ -2206,16 +2273,35 @@ export class FileManager {
     this.elements.upload.disabled = !idle;
     this.elements.mkdir.disabled = !idle;
     if (this.elements.newFile) this.elements.newFile.disabled = !idle;
-    this.elements.download.disabled = !idle || !selected || selected.type !== 'file' || sizeExceedsLimit(selected.size);
-    this.elements.rename.disabled = !idle || !selected;
-    this.elements.delete.disabled = !idle || !selected;
+    this.elements.download.disabled = !idle || count !== 1 || !selected || selected.type !== 'file' || sizeExceedsLimit(selected.size);
+    this.elements.rename.disabled = !idle || count !== 1 || !selected;
+    this.elements.delete.disabled = !idle || count === 0;
+    if (count > 1) {
+      this.elements.delete.textContent = this.localize({ zh: `批量删除 (${count})`, en: `Delete (${count})` });
+    } else {
+      this.elements.delete.textContent = this.localize({ zh: '删除', en: 'Delete' });
+    }
     this.updateSheetControls();
+    if (this.ready) {
+      if (count > 0) {
+        this.setStatus({
+          zh: `已选 ${count} 项 · 共 ${this.entries.length} 个项目`,
+          en: `${count} items selected · ${this.entries.length} items total`,
+        });
+      } else {
+        this.setStatus({
+          zh: `共 ${this.entries.length} 个项目`,
+          en: `${this.entries.length} items`,
+        });
+      }
+    }
   }
 
   private renderDisconnected(channelLost = false, detail?: LocalizedText): void {
     this.entries = [];
     this.sourceEntries = [];
     this.selectedIndex = -1;
+    this.selectedIndices.clear();
     this.uploadQueue = [];
     this.dragDepth = 0;
     this.elements.panel.classList.remove('is-drop-target');
@@ -2248,6 +2334,7 @@ export class FileManager {
     this.elements.error.hidden = false;
     this.updateStatusText({ zh: message, en: message });
     this.onError?.(message);
+    this.onToast?.(message, message, 'error');
     this.updateControls();
   }
 

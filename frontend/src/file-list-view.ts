@@ -12,6 +12,7 @@ export interface FileListItem {
 export interface FileListSnapshot {
   items: FileListItem[];
   selectedId?: string;
+  selectedIds?: string[];
   chinese: boolean;
   /** Current directory; the list only remounts when this changes. */
   path: string;

@@ -10,9 +10,11 @@
 .files-page .files-list-menu { width: 26px; height: 26px; }
 .files-page .file-table-wrap:has(.files-list) { overflow: hidden; }
 .files-list { height: 100%; min-height: 0; display: flex; flex-direction: column; color: var(--home-ink); font: 12px var(--home-mono); }
-.files-list-columns { display: grid; grid-template-columns: minmax(0, 3.2fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.8fr) repeat(3, minmax(0, .85fr)); align-items: center; height: 100%; }
+.files-list-columns { display: grid; grid-template-columns: 32px minmax(0, 3.2fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.8fr) repeat(3, minmax(0, .85fr)); align-items: center; height: 100%; }
 .files-list-columns > span { min-width: 0; padding-inline: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.files-list-columns > span:first-child { padding-right: 40px; }
+.files-list-columns > .files-list-name { padding-right: 40px; }
+.files-list-checkbox-col { display: flex !important; align-items: center; justify-content: center; padding: 0 !important; }
+.files-list-checkbox { width: 15px; height: 15px; accent-color: var(--home-accent, #f4511e); cursor: pointer; margin: 0; vertical-align: middle; }
 .files-list-header { flex: 0 0 42px; height: 42px; border-bottom: 1px solid var(--home-line); background: var(--home-bg); color: var(--home-muted); font: 500 12px var(--home-font); }
 /* Arborist 把 height 当作裁剪视口且不生成内部滚动，
    外层 viewport 负责滚动：行按 index 绝对定位，超出部分由这里承接。 */
@@ -66,15 +68,15 @@
 .files-list-icon.is-folder { color: var(--home-accent-hover); fill: var(--home-accent-soft); }
 .files-list-icon.is-archive { color: var(--home-accent-hover); }
 @media (max-width: 1100px) {
-  .files-list-columns { grid-template-columns: minmax(0, 3fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.8fr); }
+  .files-list-columns { grid-template-columns: 32px minmax(0, 3fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.8fr); }
   .files-list-columns > :is(.column-3, .column-4, .column-5) { display: none; }
 }
 @media (max-width: 600px) {
-  .files-list-columns { grid-template-columns: minmax(0, 1fr) 72px 104px; }
-  .files-list-columns > .column-1 { display: none; }
-  .files-list-columns > span { padding-inline: 8px; }
-  .files-list-columns > span:first-child { padding-right: 42px; }
-  .files-list-name { gap: 7px; }
+  .files-list-columns { grid-template-columns: 28px minmax(0, 1fr) 60px 80px; }
+  .files-list-columns > :is(.column-1, .column-3, .column-4, .column-5) { display: none; }
+  .files-list-columns > span { padding-inline: 4px; }
+  .files-list-columns > .files-list-name { padding-right: 36px; }
+  .files-list-name { gap: 6px; }
   .files-list-meta { font-size: 11px; }
-  .files-list-menu { right: 2px; width: 40px; height: 40px; }
+  .files-list-menu { right: 2px; width: 34px; height: 34px; opacity: 1; }
 }

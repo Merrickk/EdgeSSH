@@ -79,7 +79,7 @@ export class FilePage {
       host.className = 'files-list';
       this.panel.querySelector('.file-table-wrap')!.prepend(host);
       this.list = new ArboristFileList(host, {
-        select: (index) => this.manager.selectEntry(index),
+        select: (indices) => this.manager.selectEntries(indices),
         activate: (index) => this.manager.activateIndex(index),
         openMenu: (index) => this.manager.openActionSheet(index),
       });

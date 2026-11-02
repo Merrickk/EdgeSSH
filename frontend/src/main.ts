@@ -707,6 +707,7 @@ fileManager = new FileManager({
   getLanguage: () => currentLanguage,
   onError: (message) => event(message, 'sftp', true),
   onStatus: (message) => event(message, 'sftp'),
+  onToast: (zh, en, kind) => toast(bilingual(zh, en), kind),
 });
 fileTree = new FileTree({
   container: ui.fileTree,

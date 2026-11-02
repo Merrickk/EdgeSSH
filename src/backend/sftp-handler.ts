@@ -190,20 +190,20 @@ export class SFTPHandler {
       this.validatePath(path);
       if (this.upload) throw new Error('Another upload is already in progress');
       if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE_SIZE) throw new Error('Invalid upload size or file exceeds the 64 MiB transfer limit');
-      const uploadPath = overwrite ? this.temporaryUploadPath(path) : path;
-      const handle = await this.client.openFile(
-        uploadPath,
-        SFTP_OPEN_FLAGS.WRITE | SFTP_OPEN_FLAGS.CREATE | SFTP_OPEN_FLAGS.TRUNCATE | SFTP_OPEN_FLAGS.EXCLUSIVE,
-      );
+      // 直接写入目标文件（WRITE | CREATE | TRUNCATE，权限 0644），与 OpenSSH 原生 sftp client 行为一致。
+      // 不附加 EXCLUSIVE 标志，确保已确认覆盖或重复上传时不会因文件已存在报错；
+      // 不使用临时文件加重命名，避免 SFTP v3 rename 在目标文件已存在时被服务端拒绝（SSH_FX_FAILURE）。
+      const flags = SFTP_OPEN_FLAGS.WRITE | SFTP_OPEN_FLAGS.CREATE | SFTP_OPEN_FLAGS.TRUNCATE;
+      const handle = await this.client.openFile(path, flags, { permissions: 0o644 });
       this.upload = {
         requestId,
         destinationPath: path,
-        uploadPath,
+        uploadPath: path,
         size,
         received: 0,
         handle,
         handleClosed: false,
-        temporary: overwrite,
+        temporary: false,
       };
       this.sendJSON({ type: 'sftp_upload_ready', requestId, path, size });
     } catch (error) {
@@ -238,7 +238,10 @@ export class SFTPHandler {
       if (upload.received !== upload.size) throw new Error('Upload ended before the declared size was received');
       await this.client.closeHandle(upload.handle);
       upload.handleClosed = true;
-      if (upload.temporary) await this.client.rename(upload.uploadPath, upload.destinationPath);
+      if (upload.temporary) {
+        await this.client.removeFile(upload.destinationPath).catch(() => undefined);
+        await this.client.rename(upload.uploadPath, upload.destinationPath);
+      }
       this.upload = null;
       this.sendJSON({ type: 'sftp_upload_complete', requestId, path: upload.destinationPath, size: upload.received });
     } catch (error) {

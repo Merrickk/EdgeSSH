@@ -1938,16 +1938,22 @@ export class SSHSession {
 
   async handleSFTPClientMessage(message: string | ArrayBuffer): Promise<void> {
     if (this.phase === 'closed' || !this.sftpWebSocket) return;
-    if (message instanceof ArrayBuffer) {
-      if (message.byteLength === 0 || message.byteLength > 64 * 1024) {
+    if (typeof message !== 'string') {
+      const raw = message as unknown;
+      let chunk: Uint8Array;
+      if (raw instanceof Uint8Array) chunk = raw;
+      else if (raw instanceof ArrayBuffer) chunk = new Uint8Array(raw);
+      else if (ArrayBuffer.isView(raw)) chunk = new Uint8Array((raw as any).buffer, (raw as any).byteOffset, (raw as any).byteLength);
+      else chunk = new Uint8Array(raw as any);
+
+      if (chunk.byteLength === 0 || chunk.byteLength > 64 * 1024) {
         this.sendSFTPError('upload', 'Invalid upload chunk');
         return;
       }
-      if (this.sftpQueuedUploadBytes + message.byteLength > MAX_QUEUED_SFTP_UPLOAD) {
+      if (this.sftpQueuedUploadBytes + chunk.byteLength > MAX_QUEUED_SFTP_UPLOAD) {
         this.sendSFTPError('upload', 'Upload queue limit exceeded');
         return;
       }
-      const chunk = new Uint8Array(message);
       this.sftpQueuedUploadBytes += chunk.byteLength;
       await this.queueSFTPTask('upload', undefined, async () => {
         try {

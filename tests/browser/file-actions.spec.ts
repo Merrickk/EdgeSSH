@@ -121,6 +121,52 @@ test('多文件上传按队列依次传输', async ({ page }) => {
   await expect(page.locator('#file-manager-progress')).toBeHidden();
 });
 
+test('多选文件、全选与批量删除', async ({ page }) => {
+  const fixture = await fileFixture(page);
+  await connectFiles(page);
+
+  // 1. 验证默认状态：删除按钮禁用
+  const deleteBtn = page.locator('#file-delete');
+  await expect(deleteBtn).toBeDisabled();
+
+  // 2. 点击第1个文件的勾选框
+  const rows = page.locator('.files-list [role="treeitem"]');
+  await rows.nth(2).locator('.files-list-checkbox').click();
+  await expect(deleteBtn).toBeEnabled();
+  await expect(deleteBtn).toHaveText('删除');
+  await expect(page.locator('#file-manager-status')).toContainText('已选 1 项');
+
+  // 3. 勾选第2个文件：多选状态触发，按钮文字变为「批量删除 (2)」
+  await rows.nth(3).locator('.files-list-checkbox').click();
+  await expect(deleteBtn).toHaveText('批量删除 (2)');
+  await expect(page.locator('#file-manager-status')).toContainText('已选 2 项');
+
+  // 4. 表头全选框
+  const headerCheckbox = page.locator('.files-list-header .files-list-checkbox');
+  await headerCheckbox.click();
+  await expect(deleteBtn).toHaveText('批量删除 (4)');
+  await expect(page.locator('#file-manager-status')).toContainText('已选 4 项');
+
+  // 5. 再次点击表头全选框：取消全选
+  await headerCheckbox.click();
+  await expect(deleteBtn).toBeDisabled();
+  await expect(deleteBtn).toHaveText('删除');
+
+  // 6. 勾选 2 项进行批量删除
+  await rows.nth(0).locator('.files-list-checkbox').click();
+  await rows.nth(1).locator('.files-list-checkbox').click();
+  await expect(deleteBtn).toHaveText('批量删除 (2)');
+
+  page.once('dialog', (dialog) => {
+    expect(dialog.message()).toContain('批量删除选中的 2 个项目');
+    dialog.accept();
+  });
+  await deleteBtn.click();
+
+  // 验证 SFTP 发出了删除/rmdir 消息
+  await expect.poll(() => fixture.calls.filter((c) => c.type === 'sftp_delete' || c.type === 'sftp_rmdir').length).toBeGreaterThanOrEqual(2);
+});
+
 test('筛选与排序只作用于当前目录视图', async ({ page }) => {
   await fileFixture(page);
   await connectFiles(page);
