@@ -1171,7 +1171,10 @@ function updateConnectionStatus(message: LocalizedMessage): void {
 function setState(state: ConnectionState, label?: string): void {
   connectionState = state;
   ui.fullscreenFiles.disabled = state !== 'connected';
-  const currentId = profiles.find((profile) => passwordContext(profile) === currentTargetKey)?.id;
+  const currentId = (ui.profileId.value && profiles.some((p) => p.id === ui.profileId.value))
+    ? ui.profileId.value
+    : profiles.find((profile) => passwordContext(profile) === currentTargetKey)?.id;
+  dashboard?.setConnection(state, currentId);
   terminalPage?.setConnection(state, currentId);
   filePage?.setConnection(state, currentId, currentTargetLabel);
   containerPage?.setConnection(state, currentId);

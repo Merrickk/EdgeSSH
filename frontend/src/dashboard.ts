@@ -45,6 +45,8 @@ export class Dashboard {
   private busy = false;
   private isHome = true;
   private paused = false;
+  private connectedHostId?: string;
+  private connectionState: 'idle' | 'connecting' | 'connected' | 'disconnecting' | 'error' = 'idle';
   private authenticated = false;
   private returnFocus?: HTMLElement;
   private readonly dialog: HTMLDialogElement;
@@ -240,9 +242,22 @@ export class Dashboard {
     if (regionCount) {
       regionCount.textContent = `${new Set(hosts.map((host) => host.location?.countryCode).filter(Boolean)).size} 个国家 / 地区`;
     }
+    this.updateHostTotal();
+  }
+
+  setConnection(state: 'idle' | 'connecting' | 'connected' | 'disconnecting' | 'error', hostId?: string): void {
+    this.connectionState = state;
+    this.connectedHostId = state === 'connected' || state === 'connecting' ? hostId : undefined;
+    this.renderList();
+    this.updateHostTotal();
+  }
+
+  private updateHostTotal(): void {
     const hostTotal = this.root.querySelector('#host-total');
     if (hostTotal) {
-      hostTotal.textContent = `${hosts.length} 台主机 · ${hosts.filter((host) => !host.location).length} 台位置未知`;
+      const connectedCount = (this.connectionState === 'connected' && this.connectedHostId) ? 1 : 0;
+      const connectedText = connectedCount ? ' · 1 台已连接' : '';
+      hostTotal.textContent = `${this.hosts.length} 台主机${connectedText} · ${this.hosts.filter((host) => !host.location).length} 台位置未知`;
     }
   }
 
@@ -274,6 +289,8 @@ export class Dashboard {
     document.body.dataset.view = 'dashboard';
     this.selectNavigation('rail-overview');
     this.globe?.setActive(!this.paused);
+    this.renderList();
+    this.updateHostTotal();
   }
 
   show(): void {
@@ -405,7 +422,17 @@ export class Dashboard {
       const heading = document.createElement('h3'); heading.className = 'host-group-heading';
       heading.textContent = `${group} · ${hosts.filter((host) => host.group === group).length}`; list.append(heading);
       for (const host of hosts.filter((host) => host.group === group)) {
+        const isCurrentConnected = this.connectedHostId === host.id && this.connectionState === 'connected';
+        const isCurrentConnecting = this.connectedHostId === host.id && this.connectionState === 'connecting';
+
         const row = document.createElement('article'); row.className = 'host-card';
+        if (isCurrentConnected) {
+          row.classList.add('is-connected');
+          row.dataset.connected = 'true';
+        } else if (isCurrentConnecting) {
+          row.classList.add('is-connecting');
+        }
+
         const symbol = document.createElement('span'); symbol.className = 'host-symbol';
         symbol.innerHTML = systemIcon(host.system, icon('server'));
         const systemLabel = host.system
@@ -414,12 +441,28 @@ export class Dashboard {
         symbol.title = systemLabel;
         symbol.setAttribute('role', 'img');
         symbol.setAttribute('aria-label', systemLabel);
+
         const copy = document.createElement('div'); copy.className = 'host-copy';
+        const titleLine = document.createElement('div'); titleLine.className = 'host-title-line';
         const name = document.createElement('strong'); name.textContent = host.name;
+        titleLine.append(name);
+
+        if (isCurrentConnected) {
+          const badge = document.createElement('span');
+          badge.className = 'host-status-badge is-connected';
+          badge.innerHTML = '<span class="status-dot" aria-hidden="true"></span>已连接';
+          titleLine.append(badge);
+        } else if (isCurrentConnecting) {
+          const badge = document.createElement('span');
+          badge.className = 'host-status-badge is-connecting';
+          badge.innerHTML = '<span class="status-dot" aria-hidden="true"></span>连接中…';
+          titleLine.append(badge);
+        }
+
         const address = document.createElement('span');
         address.textContent = host.cfTunnel ? `${host.username}@${host.host} · CF Tunnel` : `${host.username}@${host.host}:${host.port}`;
         address.title = address.textContent;
-        copy.append(name, address);
+        copy.append(titleLine, address);
         const location = document.createElement('span'); location.className = 'host-location';
         const locationText = document.createElement('span'); locationText.className = 'host-location-text';
         if (host.location) {
@@ -437,8 +480,24 @@ export class Dashboard {
         relocate.setAttribute('aria-label', `重新获取 ${host.name} 的公网 IP 与位置`);
         relocate.addEventListener('click', () => void this.refreshLocation(host, relocate));
         location.append(relocate);
-        const connect = document.createElement('button'); connect.className = 'home-button connect-host'; connect.textContent = '连接'; connect.type = 'button';
-        connect.addEventListener('click', () => void this.connectHost(host));
+
+        const connect = document.createElement('button');
+        connect.className = 'home-button connect-host';
+        connect.type = 'button';
+        if (isCurrentConnected) {
+          connect.classList.add('is-connected');
+          connect.textContent = '进入终端';
+          connect.title = '当前主机已连接，点击进入终端';
+          connect.setAttribute('aria-label', `当前主机 ${host.name} 已连接，进入终端`);
+          connect.addEventListener('click', () => this.showTerminal());
+        } else if (isCurrentConnecting) {
+          connect.textContent = '连接中…';
+          connect.disabled = true;
+        } else {
+          connect.textContent = '连接';
+          connect.addEventListener('click', () => void this.connectHost(host));
+        }
+
         const edit = document.createElement('button'); edit.className = 'host-row-action'; edit.textContent = '编辑'; edit.type = 'button'; edit.setAttribute('aria-label', `编辑 ${host.name}`);
         edit.addEventListener('click', () => this.openEditor(host));
         const remove = document.createElement('button'); remove.className = 'host-row-action delete'; remove.textContent = '×'; remove.type = 'button'; remove.setAttribute('aria-label', `删除 ${host.name}`);
