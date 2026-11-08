@@ -3,10 +3,11 @@ import type { Database, DeploymentSettings } from './deployment-config.ts';
 
 export interface DeploymentWorkspaceState {
   accountId: string;
-  authProvider?: 'cloudflare' | 'github';
+  authProvider?: 'cloudflare' | 'github' | 'password' | 'linuxdo';
   authRevision: number;
   accessNotBefore: number;
   githubAdminId?: string;
+  linuxdoAdminId?: string;
 }
 
 interface StateRow {
@@ -15,6 +16,7 @@ interface StateRow {
   auth_revision: number;
   access_not_before: number;
   github_admin_id: string | null;
+  linuxdo_admin_id?: string | null;
 }
 
 interface QueryResult<T> { success: boolean; results: T[] }
@@ -54,7 +56,7 @@ export async function readWorkspaceState(
       'SELECT account_id, auth_provider, auth_revision, access_not_before, github_admin_id FROM workspace_state WHERE id = 1');
     const row = rows[0];
     if (row) {
-      if (row.auth_provider !== 'cloudflare' && row.auth_provider !== 'github') {
+      if (!['cloudflare', 'github', 'password', 'linuxdo'].includes(row.auth_provider)) {
         throw new Error('管理员工作区中的认证方式无效，请检查数据库状态。');
       }
       if (owners[0] && owners[0].account_id !== row.account_id) {
@@ -62,10 +64,11 @@ export async function readWorkspaceState(
       }
       return {
         accountId: row.account_id,
-        authProvider: row.auth_provider,
+        authProvider: row.auth_provider as DeploymentWorkspaceState['authProvider'],
         authRevision: row.auth_revision,
         accessNotBefore: row.access_not_before,
-        githubAdminId: row.github_admin_id ?? undefined,
+        ...(row.github_admin_id ? { githubAdminId: row.github_admin_id } : {}),
+        ...(row.linuxdo_admin_id ? { linuxdoAdminId: row.linuxdo_admin_id } : {}),
       };
     }
   }
@@ -83,34 +86,43 @@ export async function updateWorkspaceState(
   settings: DeploymentSettings,
   database: Database,
   previous: DeploymentWorkspaceState,
-  githubAdminId?: string,
+  options: { githubAdminId?: string; linuxdoAdminId?: string } | string = {},
   now = Math.floor(Date.now() / 1000),
 ): Promise<DeploymentWorkspaceState> {
+  const adminIds = typeof options === 'string' ? { githubAdminId: options } : options;
   const rows = await query<StateRow>(api, settings, database,
-    'SELECT account_id, auth_provider, auth_revision, access_not_before, github_admin_id FROM workspace_state WHERE id = 1');
+    'SELECT account_id, auth_provider, auth_revision, access_not_before, github_admin_id, linuxdo_admin_id FROM workspace_state WHERE id = 1');
   const current = rows[0];
   if (!current) throw new Error('数据库迁移未建立管理员工作区状态，停止部署。');
   if (current.account_id !== previous.accountId) throw new Error('管理员工作区在部署期间发生变化，停止部署。');
 
-  const retainedGitHubId = settings.authProvider === 'github' ? githubAdminId : (current.github_admin_id ?? undefined);
+  const retainedGitHubId = settings.authProvider === 'github' ? adminIds.githubAdminId : (current.github_admin_id ?? undefined);
   if (settings.authProvider === 'github' && !retainedGitHubId) {
     throw new Error('GitHub 管理员数字 ID 尚未固定，停止部署。');
   }
+  const retainedLinuxDoId = settings.authProvider === 'linuxdo' ? adminIds.linuxdoAdminId : (current.linuxdo_admin_id ?? undefined);
+  if (settings.authProvider === 'linuxdo' && !retainedLinuxDoId) {
+    throw new Error('LINUX DO 管理员数字 ID 尚未固定，停止部署。');
+  }
   const providerChanged = current.auth_provider !== settings.authProvider;
-  const administratorChanged = settings.authProvider === 'github'
+  const githubAdminChanged = settings.authProvider === 'github'
     && current.github_admin_id !== null && current.github_admin_id !== retainedGitHubId;
+  const linuxdoAdminChanged = settings.authProvider === 'linuxdo'
+    && current.linuxdo_admin_id !== null && current.linuxdo_admin_id !== retainedLinuxDoId;
+  const administratorChanged = githubAdminChanged || linuxdoAdminChanged;
   const revision = current.auth_revision + (providerChanged || administratorChanged ? 1 : 0);
   const accessNotBefore = providerChanged ? now + 1 : current.access_not_before;
   await query(api, settings, database,
     `UPDATE workspace_state
-     SET auth_provider = ?, auth_revision = ?, access_not_before = ?, github_admin_id = ?
+     SET auth_provider = ?, auth_revision = ?, access_not_before = ?, github_admin_id = ?, linuxdo_admin_id = ?
      WHERE id = 1 AND account_id = ?`,
-    [settings.authProvider, revision, accessNotBefore, retainedGitHubId ?? null, previous.accountId]);
+    [settings.authProvider, revision, accessNotBefore, retainedGitHubId ?? null, retainedLinuxDoId ?? null, previous.accountId]);
   return {
     accountId: previous.accountId,
     authProvider: settings.authProvider,
     authRevision: revision,
     accessNotBefore,
-    githubAdminId: retainedGitHubId,
+    ...(retainedGitHubId ? { githubAdminId: retainedGitHubId } : {}),
+    ...(retainedLinuxDoId ? { linuxdoAdminId: retainedLinuxDoId } : {}),
   };
 }

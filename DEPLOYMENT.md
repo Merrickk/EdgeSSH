@@ -2,21 +2,30 @@
 
 ## 先确定入口并选择一种登录方式
 
-本项目只有一个管理员、一份主机资料库。`AUTH_PROVIDER` 决定唯一生效的认证方式，不同时维护两套登录状态。两种方式都部署到 Cloudflare Workers，但 **GitHub 模式不需要 Zero Trust 或 Access 权限**。
+本项目只有一个管理员、一份主机资料库。`AUTH_PROVIDER` 决定唯一生效的认证方式，不同时维护两套登录状态。支持四种认证方式：
+- **密码模式 (`password`)**：最直接、最稳定，完全自包含于 EdgeSSH 内，**无任何第三方网络依赖**，彻底解决 GitHub 在部分地区无法访问或网络不稳定的问题。
+- **LINUX DO 模式 (`linuxdo`)**：基于 Connect with LINUX DO 社区授权登录，国内直连畅通，一键快速授权。
+- **GitHub 模式 (`github`)**：原生 GitHub OAuth，无需 Zero Trust。
+- **Cloudflare 模式 (`cloudflare`)**：结合 Cloudflare Zero Trust (Access) 提供网关级防护。
 
 多数用户建议先准备自定义域名，例如 `ssh.example.com`。在 GitHub **设置（Settings）> 机密和变量（Secrets and variables）> Actions** 配置：
 
-| 名称 | 类型 | Cloudflare 模式 | GitHub 模式 |
-| --- | --- | --- | --- |
-| `AUTH_PROVIDER` | Variable | `cloudflare`（默认） | `github` |
-| `CLOUDFLARE_API_TOKEN` | Secret | 必填 | 必填 |
-| `CUSTOM_DOMAIN` | Variable | 推荐填写实际主机名 | 推荐填写实际主机名 |
-| `PREVIEW_DOMAIN` | Variable | 可选；仅部署独立预览 Worker 时使用 | 可选；仅部署独立预览 Worker 时使用 |
-| `ADMIN_EMAIL` | Variable | 管理员邮箱 | 不需要 |
-| `GH_CLIENT_ID` | Variable | 不需要 | OAuth App 的 Client ID |
-| `GH_CLIENT_SECRET` | Secret | 不需要 | OAuth App 的 Client Secret |
-| `GH_ADMIN` | Variable | 不需要 | 首次启用时用于解析数字 ID 的 GitHub 用户名 |
-| `GH_ADMIN_ID` | Variable | 不需要 | 通常不填；显式更换管理员时填写新的数字用户 ID |
+| 名称 | 类型 | 密码模式 | LINUX DO 模式 | GitHub 模式 | Cloudflare 模式 |
+| --- | --- | --- | --- | --- | --- |
+| `AUTH_PROVIDER` | Variable | `password` | `linuxdo` | `github` | `cloudflare`（默认） |
+| `CLOUDFLARE_API_TOKEN` | Secret | 必填 | 必填 | 必填 | 必填 |
+| `CUSTOM_DOMAIN` | Variable | 推荐填写实际主机名 | 推荐填写实际主机名 | 推荐填写实际主机名 | 推荐填写实际主机名 |
+| `PREVIEW_DOMAIN` | Variable | 可选 | 可选 | 可选 | 可选 |
+| `ADMIN_PASSWORD` | Secret | 必填（管理员密码） | 不需要 | 不需要 | 不需要 |
+| `ADMIN_USERNAME` | Variable | 可选（默认 `admin`） | 不需要 | 不需要 | 不需要 |
+| `LINUXDO_CLIENT_ID` | Variable | 不需要 | Connect Client ID | 不需要 | 不需要 |
+| `LINUXDO_CLIENT_SECRET` | Secret | 不需要 | Connect Secret | 不需要 | 不需要 |
+| `LINUXDO_ADMIN_ID` | Variable | 不需要 | 数字用户 ID | 不需要 | 不需要 |
+| `GH_CLIENT_ID` | Variable | 不需要 | 不需要 | OAuth App Client ID | 不需要 |
+| `GH_CLIENT_SECRET` | Secret | 不需要 | 不需要 | OAuth App Secret | 不需要 |
+| `GH_ADMIN` | Variable | 不需要 | 不需要 | GitHub 用户名 | 不需要 |
+| `GH_ADMIN_ID` | Variable | 不需要 | 不需要 | 数字用户 ID | 不需要 |
+| `ADMIN_EMAIL` | Variable | 不需要 | 不需要 | 不需要 | 管理员邮箱 |
 
 `CUSTOM_DOMAIN` 只填完整主机名，不带 `https://`、路径或通配符。域名必须由部署账户的 Cloudflare Zone 管理；Action 会自动绑定 Worker，Cloudflare 负责 DNS 与证书。需要使用免费 `workers.dev` 地址时将它留空，不能填写 `*.workers.dev`。
 
@@ -196,6 +205,11 @@ EdgeSSH-Auto-Update: true
 | `D1_DATABASE_NAME` | Variable | `<Worker 名>-accounts` |
 | `D1_DATABASE_ID` | Variable | 指定已有 D1 UUID，不填则按名称查找 |
 | `ACCESS_IDP_IDS` | Variable | 新应用采用的 IdP UUID，多个用逗号分隔 |
+| `ADMIN_PASSWORD` | Secret | 密码模式必填；管理员登录密码 |
+| `ADMIN_USERNAME` | Variable | 密码模式可选；管理员登录用户名（默认 `admin`） |
+| `LINUXDO_CLIENT_ID` | Variable | LINUX DO 模式必填；Connect Client ID |
+| `LINUXDO_CLIENT_SECRET` | Secret | LINUX DO 模式必填；Connect Client Secret |
+| `LINUXDO_ADMIN_ID` | Variable | LINUX DO 模式必填；允许登录的 LINUX DO 数字用户 ID |
 | `GH_ADMIN_ID` | Variable | 仅显式更换 GitHub 管理员时填写数字用户 ID |
 | `PREVIEW_DOMAIN` | Variable | 仅 `部署预览 Worker` 使用；留空为 `<WORKER_NAME>-preview.<账户子域>.workers.dev` |
 | `ENCRYPTION_KEY` | Secret，仅恢复/迁移使用 | 仅 Worker 尚无密钥时使用；已有密钥不会覆盖 |

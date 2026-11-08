@@ -214,7 +214,13 @@ export class Dashboard {
       this.authenticated = true;
       this.get('#account-label').textContent = account.username;
       this.get('.account-avatar').textContent = account.username.slice(0, 1).toUpperCase();
-      this.get('#auth-provider-label').textContent = provider === 'github' ? 'GitHub' : 'Access';
+      const providerLabels: Record<string, string> = {
+        github: 'GitHub',
+        cloudflare: 'Access',
+        password: '密码',
+        linuxdo: 'LINUX DO',
+      };
+      this.get('#auth-provider-label').textContent = providerLabels[provider] || provider;
       const action = this.get<HTMLAnchorElement>('#account-action');
       action.textContent = '退出'; action.title = '退出登录'; action.href = '/api/auth/logout';
       await this.refresh();

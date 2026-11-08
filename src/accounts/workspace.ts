@@ -1,11 +1,14 @@
 import type { Env } from '../types.ts';
+import type { AuthProviderType } from './auth-provider.ts';
 import { APIError } from './http.ts';
 
 export interface WorkspaceState {
   accountId: string;
-  authProvider: 'cloudflare' | 'github';
+  authProvider: AuthProviderType;
   authRevision: number;
   accessNotBefore: number;
+  githubAdminId?: string;
+  linuxdoAdminId?: string;
 }
 
 interface WorkspaceRow {
@@ -13,20 +16,26 @@ interface WorkspaceRow {
   auth_provider: string;
   auth_revision: number;
   access_not_before: number;
+  github_admin_id?: string | null;
+  linuxdo_admin_id?: string | null;
 }
+
+const validProviders: readonly string[] = ['cloudflare', 'github', 'password', 'linuxdo'];
 
 export async function workspaceState(env: Pick<Env, 'DB'>): Promise<WorkspaceState> {
   const row = await env.DB.prepare(
-    'SELECT account_id, auth_provider, auth_revision, access_not_before FROM workspace_state WHERE id = 1',
+    'SELECT * FROM workspace_state WHERE id = 1',
   ).first<WorkspaceRow>();
-  if (!row || (row.auth_provider !== 'cloudflare' && row.auth_provider !== 'github')) {
+  if (!row || !validProviders.includes(row.auth_provider)) {
     throw new APIError('管理员工作区尚未完成部署初始化。', 503);
   }
   return {
     accountId: row.account_id,
-    authProvider: row.auth_provider,
+    authProvider: row.auth_provider as AuthProviderType,
     authRevision: row.auth_revision,
     accessNotBefore: row.access_not_before,
+    ...(row.github_admin_id ? { githubAdminId: row.github_admin_id } : {}),
+    ...(row.linuxdo_admin_id ? { linuxdoAdminId: row.linuxdo_admin_id } : {}),
   };
 }
 

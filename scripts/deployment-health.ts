@@ -38,3 +38,66 @@ export async function verifyGithubDeployment(
     throw new Error(`GitHub 工作区验收失败（/api/auth/me HTTP ${account.status}）。请检查 D1 迁移与认证方式是否部署完成，再重跑 Deploy。`);
   }
 }
+
+export async function verifyLinuxDoDeployment(
+  hostname: string,
+  clientId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  const origin = `https://${hostname}`;
+  async function probe(path: string): Promise<Response> {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await fetcher(`${origin}${path}`, { redirect: 'manual', signal: AbortSignal.timeout(30_000) });
+      } catch (err) {
+        if (attempt === 3) {
+          throw new Error(`LINUX DO 登录入口验收无法连接 ${path}（尝试 3 次失败），请检查正式域名的 DNS、证书及网络后重跑 Deploy。`);
+        }
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
+    }
+    throw new Error(`LINUX DO 登录入口验收无法连接 ${path}`);
+  }
+  const login = await probe('/auth/login');
+  const location = login.headers.get('Location');
+  const target = location && URL.canParse(location, origin) ? new URL(location, origin) : null;
+  if (login.status !== 302 || target?.origin !== 'https://connect.linux.do'
+    || target.pathname !== '/oauth2/authorize'
+    || target.searchParams.get('client_id') !== clientId
+    || target.searchParams.get('redirect_uri') !== `${origin}/auth/callback`
+    || !login.headers.getSetCookie().some((value) => value.startsWith('__Host-edgessh-oauth='))) {
+    throw new Error(`LINUX DO 登录入口验收失败（/auth/login HTTP ${login.status}）。请检查 Worker 配置与正式入口。`);
+  }
+  const account = await probe('/api/auth/me');
+  if (account.status !== 401) {
+    throw new Error(`LINUX DO 工作区验收失败（/api/auth/me HTTP ${account.status}）。请检查 D1 迁移与认证方式是否部署完成。`);
+  }
+}
+
+export async function verifyPasswordDeployment(
+  hostname: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  const origin = `https://${hostname}`;
+  async function probe(path: string): Promise<Response> {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await fetcher(`${origin}${path}`, { redirect: 'manual', signal: AbortSignal.timeout(30_000) });
+      } catch (err) {
+        if (attempt === 3) {
+          throw new Error(`密码登录入口验收无法连接 ${path}（尝试 3 次失败），请检查正式域名的 DNS、证书及网络后重跑 Deploy。`);
+        }
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
+    }
+    throw new Error(`密码登录入口验收无法连接 ${path}`);
+  }
+  const login = await probe('/auth/login');
+  if (login.status !== 200 || !login.headers.get('Content-Type')?.includes('text/html')) {
+    throw new Error(`密码登录入口验收失败（/auth/login HTTP ${login.status}）。请检查 Worker 配置。`);
+  }
+  const account = await probe('/api/auth/me');
+  if (account.status !== 401) {
+    throw new Error(`密码登录工作区验收失败（/api/auth/me HTTP ${account.status}）。请检查 D1 迁移与认证方式是否部署完成。`);
+  }
+}

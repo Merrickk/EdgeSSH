@@ -1,6 +1,6 @@
 import type { TomlTable } from 'smol-toml';
 
-export const runtimeSecretNames = ['ENCRYPTION_KEY', 'ACCESS_TEAM_DOMAIN', 'ACCESS_AUD', 'GH_CLIENT_SECRET'] as const;
+export const runtimeSecretNames = ['ENCRYPTION_KEY', 'ACCESS_TEAM_DOMAIN', 'ACCESS_AUD', 'GH_CLIENT_SECRET', 'ADMIN_PASSWORD', 'LINUXDO_CLIENT_SECRET'] as const;
 export type RuntimeSecrets = Record<(typeof runtimeSecretNames)[number], string>;
 
 export interface DeploymentSettings {
@@ -12,10 +12,15 @@ export interface DeploymentSettings {
   customDomain?: string;
   previewDomain?: string;
   deployPreview?: boolean;
-  authProvider: 'cloudflare' | 'github';
+  authProvider: 'cloudflare' | 'github' | 'password' | 'linuxdo';
+  adminPassword?: string;
+  adminUsername?: string;
   githubClientId?: string;
   githubAdmin?: string;
   githubAdminId?: string;
+  linuxdoClientId?: string;
+  linuxdoAdmin?: string;
+  linuxdoAdminId?: string;
   adminEmail?: string;
   identityProviderIds: string[];
   secrets: Partial<RuntimeSecrets>;
@@ -30,9 +35,16 @@ export function readDeploymentSettings(
   template: TomlTable,
   env: NodeJS.ProcessEnv,
 ): DeploymentSettings {
-  const authProvider = env.AUTH_PROVIDER?.trim() || 'cloudflare';
-  if (authProvider !== 'cloudflare' && authProvider !== 'github') throw new Error('AUTH_PROVIDER 只能是 cloudflare 或 github。');
-  const required = ['CLOUDFLARE_API_TOKEN', ...(authProvider === 'github' ? ['GH_CLIENT_ID', 'GH_CLIENT_SECRET'] : [])];
+  const authProvider = (env.AUTH_PROVIDER?.trim() || 'cloudflare') as DeploymentSettings['authProvider'];
+  if (!['cloudflare', 'github', 'password', 'linuxdo'].includes(authProvider)) {
+    throw new Error('AUTH_PROVIDER 只能是 cloudflare、github、password 或 linuxdo。');
+  }
+  const required = [
+    'CLOUDFLARE_API_TOKEN',
+    ...(authProvider === 'github' ? ['GH_CLIENT_ID', 'GH_CLIENT_SECRET'] : []),
+    ...(authProvider === 'linuxdo' ? ['LINUXDO_CLIENT_ID', 'LINUXDO_CLIENT_SECRET'] : []),
+    ...(authProvider === 'password' ? ['ADMIN_PASSWORD'] : []),
+  ];
   const missing = required.filter((name) => !env[name]?.trim());
   if (missing.length) throw new Error(`缺少部署配置：${missing.join(', ')}。请在 GitHub Actions 中配置。`);
 
@@ -89,8 +101,19 @@ export function readDeploymentSettings(
   if (githubAdminId && !/^[1-9]\d*$/.test(githubAdminId)) {
     throw new Error('GH_ADMIN_ID 必须是 GitHub 个人账号的数字用户 ID。');
   }
-  const selectedSecrets = authProvider === 'github'
-    ? ['ENCRYPTION_KEY', 'GH_CLIENT_SECRET'] : ['ENCRYPTION_KEY', 'ACCESS_TEAM_DOMAIN', 'ACCESS_AUD'];
+  const linuxdoClientId = authProvider === 'linuxdo' ? env.LINUXDO_CLIENT_ID!.trim() : undefined;
+  const linuxdoAdmin = authProvider === 'linuxdo' ? env.LINUXDO_ADMIN?.trim().toLowerCase() || undefined : undefined;
+  const linuxdoAdminId = authProvider === 'linuxdo' ? env.LINUXDO_ADMIN_ID?.trim() || undefined : undefined;
+  if (linuxdoAdminId && !/^[1-9]\d*$/.test(linuxdoAdminId)) {
+    throw new Error('LINUXDO_ADMIN_ID 必须是 LINUX DO 个人账号的数字用户 ID。');
+  }
+  const adminPassword = authProvider === 'password' || env.ADMIN_PASSWORD ? env.ADMIN_PASSWORD?.trim() : undefined;
+  const adminUsername = env.ADMIN_USERNAME?.trim() || undefined;
+  const selectedSecrets: (keyof RuntimeSecrets)[] = ['ENCRYPTION_KEY'];
+  if (authProvider === 'github') selectedSecrets.push('GH_CLIENT_SECRET');
+  if (authProvider === 'cloudflare') selectedSecrets.push('ACCESS_TEAM_DOMAIN', 'ACCESS_AUD');
+  if (authProvider === 'linuxdo') selectedSecrets.push('LINUXDO_CLIENT_SECRET');
+  if (authProvider === 'password' || env.ADMIN_PASSWORD) selectedSecrets.push('ADMIN_PASSWORD');
   const secrets = Object.fromEntries(selectedSecrets
     .filter((name) => env[name]?.trim())
     .map((name) => [name, env[name]!.trim()])) as Partial<RuntimeSecrets>;
@@ -111,7 +134,9 @@ export function readDeploymentSettings(
 
   return {
     accountId, apiToken: env.CLOUDFLARE_API_TOKEN!.trim(), workerName,
-    databaseName, databaseId, customDomain, previewDomain, deployPreview, authProvider, githubClientId, githubAdmin, githubAdminId,
+    databaseName, databaseId, customDomain, previewDomain, deployPreview, authProvider,
+    adminPassword, adminUsername, githubClientId, githubAdmin, githubAdminId,
+    linuxdoClientId, linuxdoAdmin, linuxdoAdminId,
     adminEmail, identityProviderIds, secrets,
   };
 }
@@ -120,7 +145,7 @@ export function createDeploymentConfig(
   template: TomlTable,
   settings: DeploymentSettings,
   database: Database,
-  runtime?: { hostname: string; previewOrigin?: string; githubAdminId?: string },
+  runtime?: { hostname: string; previewOrigin?: string; githubAdminId?: string; linuxdoAdminId?: string },
 ): TomlTable {
   return {
     ...template,
@@ -137,6 +162,13 @@ export function createDeploymentConfig(
       ...(settings.authProvider === 'github' ? {
         GH_CLIENT_ID: settings.githubClientId!,
         ...(runtime?.githubAdminId ? { GH_ADMIN_ID: runtime.githubAdminId } : {}),
+      } : {}),
+      ...(settings.authProvider === 'linuxdo' ? {
+        LINUXDO_CLIENT_ID: settings.linuxdoClientId!,
+        ...(runtime?.linuxdoAdminId ? { LINUXDO_ADMIN_ID: runtime.linuxdoAdminId } : {}),
+      } : {}),
+      ...(settings.authProvider === 'password' && settings.adminUsername ? {
+        ADMIN_USERNAME: settings.adminUsername,
       } : {}),
     },
     ...(settings.customDomain ? { routes: [{ pattern: settings.customDomain, custom_domain: true }] } : {}),

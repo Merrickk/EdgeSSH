@@ -436,7 +436,24 @@ Worker 本身就是真正的 SSH Client,建立连接时必然要处理 SSH 凭�
 
 ### 02 · 选择认证方式
 
-GitHub OAuth:
+**密码模式**（推荐，无第三方依赖、免受 GitHub 网络不可达或波动影响）：
+
+```text
+AUTH_PROVIDER=password        # Variable
+ADMIN_PASSWORD=<管理员登录密码> # Secret
+ADMIN_USERNAME=admin          # Variable, 可选, 默认 admin
+```
+
+**LINUX DO 社区授权登录**：
+
+```text
+AUTH_PROVIDER=linuxdo         # Variable
+LINUXDO_CLIENT_ID=<Client ID> # Variable
+LINUXDO_CLIENT_SECRET=<Secret># Secret
+LINUXDO_ADMIN_ID=<数字用户 ID> # Variable
+```
+
+**GitHub OAuth**：
 
 ```text
 AUTH_PROVIDER=github          # Variable
@@ -449,7 +466,7 @@ GH_ADMIN=<GitHub 用户名>      # Variable
 
 **旧版点击登录报“服务暂时不可用”**：请同步含 2026-10-07 Base64 解码修复的代码，再对最新 `main` 运行 Deploy。保留原 Worker、D1 和 `ENCRYPTION_KEY`；不是靠扩大 Token 权限或换密钥解决。新版 Deploy 会自动检查 GitHub 登录入口与工作区状态。
 
-或者 Cloudflare Access:
+**Cloudflare Access**：
 
 ```text
 AUTH_PROVIDER=cloudflare      # Variable,默认值

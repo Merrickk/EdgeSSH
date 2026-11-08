@@ -5,12 +5,16 @@ import type { DeploymentSettings, RuntimeSecrets } from './deployment-config.ts'
 interface AuthenticationOptions {
   existingSecrets?: Set<string>;
   fixedGithubAdminId?: string;
+  fixedLinuxDoAdminId?: string;
   previousProvider?: DeploymentSettings['authProvider'];
   fetcher?: typeof fetch;
 }
 
 export function requiredAuthSecrets(provider: DeploymentSettings['authProvider']): string[] {
-  return provider === 'github' ? ['GH_CLIENT_SECRET'] : ['ACCESS_TEAM_DOMAIN', 'ACCESS_AUD'];
+  if (provider === 'github') return ['GH_CLIENT_SECRET'];
+  if (provider === 'linuxdo') return ['LINUXDO_CLIENT_SECRET'];
+  if (provider === 'password') return ['ADMIN_PASSWORD'];
+  return ['ACCESS_TEAM_DOMAIN', 'ACCESS_AUD'];
 }
 
 export async function prepareAuthentication(
@@ -18,8 +22,24 @@ export async function prepareAuthentication(
   settings: DeploymentSettings,
   hostname: string,
   options: AuthenticationOptions = {},
-): Promise<{ secrets: Partial<RuntimeSecrets>; githubAdminId?: string }> {
+): Promise<{ secrets: Partial<RuntimeSecrets>; githubAdminId?: string; linuxdoAdminId?: string }> {
   const fetcher = options.fetcher ?? fetch;
+  if (settings.authProvider === 'password') {
+    if (!settings.secrets.ADMIN_PASSWORD) {
+      throw new Error('密码模式部署需要配置 ADMIN_PASSWORD Secret。');
+    }
+    return { secrets: { ADMIN_PASSWORD: settings.secrets.ADMIN_PASSWORD } };
+  }
+  if (settings.authProvider === 'linuxdo') {
+    const fixed = settings.linuxdoAdminId ?? options.fixedLinuxDoAdminId;
+    if (fixed) {
+      return { linuxdoAdminId: fixed, secrets: { LINUXDO_CLIENT_SECRET: settings.secrets.LINUXDO_CLIENT_SECRET! } };
+    }
+    if (!settings.linuxdoAdmin && !settings.linuxdoAdminId) {
+      throw new Error('首次配置 LINUX DO 登录需要设置 LINUXDO_ADMIN_ID（数字用户 ID）。');
+    }
+    return { linuxdoAdminId: settings.linuxdoAdminId, secrets: { LINUXDO_CLIENT_SECRET: settings.secrets.LINUXDO_CLIENT_SECRET! } };
+  }
   if (settings.authProvider === 'cloudflare') {
     const canRetain = options.previousProvider === 'cloudflare'
       && requiredAuthSecrets('cloudflare').every((name) => options.existingSecrets?.has(name));

@@ -61,6 +61,11 @@ export interface Env {
   GH_CLIENT_ID?: string;
   GH_CLIENT_SECRET?: string;
   GH_ADMIN_ID?: string;
+  ADMIN_PASSWORD?: string;
+  ADMIN_USERNAME?: string;
+  LINUXDO_CLIENT_ID?: string;
+  LINUXDO_CLIENT_SECRET?: string;
+  LINUXDO_ADMIN_ID?: string;
   SSH_SESSIONS: DurableObjectNamespace;
   ASSETS?: Fetcher;
   CONNECT_TIMEOUT_MS?: string;

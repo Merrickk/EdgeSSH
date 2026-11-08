@@ -3,14 +3,14 @@ import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'smol-toml';
 import { ensureDatabase } from './cloudflare-d1.ts';
-import { createDeploymentConfig, createPreviewDeploymentConfig, readDeploymentSettings } from './deployment-config.ts';
+import { createDeploymentConfig, createPreviewDeploymentConfig, readDeploymentSettings, type DeploymentSettings } from './deployment-config.ts';
 import { CloudflareApi, resolveAccountId } from './cloudflare-api.ts';
 import { resolveWorkerHostname, resolveWorkersDevSubdomain } from './cloudflare-access.ts';
 import { previewOrigin } from '../src/forwarding/security.ts';
 import { maskSecrets, prepareEncryptionSecret, readWorkerSecretNames, readWorkerVariable } from './deployment-secrets.ts';
 import { prepareAuthentication, requiredAuthSecrets } from './deployment-auth.ts';
 import { readWorkspaceState, updateWorkspaceState } from './workspace-state.ts';
-import { verifyGithubDeployment } from './deployment-health.ts';
+import { verifyGithubDeployment, verifyLinuxDoDeployment, verifyPasswordDeployment } from './deployment-health.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const generatedConfig = '.wrangler.generated.toml';
@@ -54,11 +54,12 @@ async function main(): Promise<void> {
   }
   const database = await ensureDatabase(settings);
   const workspace = await readWorkspaceState(api, settings, database);
-  const deployedProvider = workspace.authProvider
+  const rawDeployedProvider = workspace.authProvider
     ?? await readWorkerVariable(api, settings, 'AUTH_PROVIDER');
-  if (deployedProvider !== undefined && deployedProvider !== 'cloudflare' && deployedProvider !== 'github') {
+  if (rawDeployedProvider !== undefined && !['cloudflare', 'github', 'password', 'linuxdo'].includes(rawDeployedProvider)) {
     throw new Error('已部署的认证方式无效，停止自动覆盖。');
   }
+  const deployedProvider = rawDeployedProvider as DeploymentSettings['authProvider'] | undefined;
   const deployedGitHubId = workspace.githubAdminId
     ?? (settings.authProvider === 'github'
       ? await readWorkerVariable(api, settings, 'GH_ADMIN_ID')
@@ -68,15 +69,26 @@ async function main(): Promise<void> {
   if (deployedGitHubId && !/^[1-9]\d*$/.test(deployedGitHubId)) {
     throw new Error('已部署的 GitHub 管理员数字 ID 无效，停止自动覆盖。');
   }
+  const deployedLinuxDoId = workspace.linuxdoAdminId
+    ?? (settings.authProvider === 'linuxdo'
+      ? await readWorkerVariable(api, settings, 'LINUXDO_ADMIN_ID')
+      : undefined);
+  if (deployedLinuxDoId && !/^[1-9]\d*$/.test(deployedLinuxDoId)) {
+    throw new Error('已部署的 LINUX DO 管理员数字 ID 无效，停止自动覆盖。');
+  }
   const authentication = await prepareAuthentication(api, settings, hostname, {
     existingSecrets,
     fixedGithubAdminId: deployedGitHubId,
+    fixedLinuxDoAdminId: deployedLinuxDoId,
     previousProvider: deployedProvider,
   });
   const secrets = { ...authentication.secrets, ...await prepareEncryptionSecret(api, settings, database, existingSecrets) };
   maskSecrets(secrets);
   const config = createDeploymentConfig(template, settings, database, {
-    hostname, ...(preview ? { previewOrigin: preview } : {}), githubAdminId: authentication.githubAdminId,
+    hostname,
+    ...(preview ? { previewOrigin: preview } : {}),
+    githubAdminId: authentication.githubAdminId,
+    linuxdoAdminId: authentication.linuxdoAdminId,
   });
   // 临时配置放在仓库根目录，保持 assets、main、migrations_dir 的相对路径语义。
   await writeFile(new URL(`../${generatedConfig}`, import.meta.url), stringify(config), 'utf8');
@@ -85,7 +97,10 @@ async function main(): Promise<void> {
   // Secret 只通过标准输入发送，不写临时文件或命令行参数；首次部署由 Wrangler 创建草稿 Worker。
   if (Object.keys(secrets).length) await runWrangler(['secret', 'bulk'], JSON.stringify(secrets));
   await runWrangler(['deploy']);
-  await updateWorkspaceState(api, settings, database, workspace, authentication.githubAdminId);
+  await updateWorkspaceState(api, settings, database, workspace, {
+    githubAdminId: authentication.githubAdminId,
+    linuxdoAdminId: authentication.linuxdoAdminId,
+  });
   // Wrangler 默认保留既有 Secret；部署后再次核对名称，避免把缺少认证的版本当作成功。
   const deployedSecrets = await readWorkerSecretNames(api, settings);
   for (const name of ['ENCRYPTION_KEY', ...requiredAuthSecrets(settings.authProvider)]) {
@@ -94,6 +109,12 @@ async function main(): Promise<void> {
   if (settings.authProvider === 'github') {
     await verifyGithubDeployment(hostname, settings.githubClientId!);
     console.log('GitHub 登录入口签名与 D1 工作区验收通过（真实 GitHub 授权仍需管理员登录完成）。');
+  } else if (settings.authProvider === 'linuxdo') {
+    await verifyLinuxDoDeployment(hostname, settings.linuxdoClientId!);
+    console.log('LINUX DO 登录入口签名与 D1 工作区验收通过（真实授权仍需管理员登录完成）。');
+  } else if (settings.authProvider === 'password') {
+    await verifyPasswordDeployment(hostname);
+    console.log('密码登录入口与 D1 工作区验收通过。');
   }
   // 预览 Worker 只做代理入口和 DO 绑定，不执行迁移、不写入任何 Secret。
   if (settings.deployPreview) {
@@ -106,6 +127,8 @@ async function main(): Promise<void> {
     await appendFile(process.env.GITHUB_STEP_SUMMARY,
       `## EdgeSSH 部署完成\n\n入口：https://${hostname}\n\n${settings.deployPreview ? `预览：https://${previewHostname}\n\n` : ''}登录方式：${settings.authProvider}\n\n`
       + (settings.authProvider === 'github' ? `GitHub OAuth 回调地址：https://${hostname}/auth/callback\n\n` : '')
+      + (settings.authProvider === 'linuxdo' ? `LINUX DO OAuth 回调地址：https://${hostname}/auth/callback\n\n` : '')
+      + (settings.authProvider === 'password' ? '已配置管理员密码登录，访问入口即可使用密码登录。\n\n' : '')
       + 'D1 已迁移，运行时 Secret 已保存在 Cloudflare。后续部署保留原加密密钥与管理员资料。\n');
   }
 }

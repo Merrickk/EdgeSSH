@@ -4,6 +4,8 @@ import { accessToken } from './access-token.ts';
 import { APIError } from './http.ts';
 import { authProvider } from './auth-provider.ts';
 import { githubAccount } from './github-auth.ts';
+import { linuxdoAccount } from './linuxdo-auth.ts';
+import { passwordAccount } from './password-auth.ts';
 import { workspaceState, type WorkspaceState } from './workspace.ts';
 
 export interface WorkspaceAccount { id: string; username: string }
@@ -13,8 +15,16 @@ export async function currentAccount(request: Request, env: Env): Promise<Worksp
   const provider = authProvider(env);
   const workspace = await workspaceState(env);
   if (workspace.authProvider !== provider) throw new APIError('登录方式切换尚未完成，请重新部署。', 503);
-  const identity = provider === 'github'
-    ? await githubAccount(request, env, workspace.authRevision) : await accessAccount(request, env, workspace);
+  let identity: { username: string };
+  if (provider === 'github') {
+    identity = await githubAccount(request, env, workspace.authRevision);
+  } else if (provider === 'linuxdo') {
+    identity = await linuxdoAccount(request, env, workspace.authRevision);
+  } else if (provider === 'password') {
+    identity = await passwordAccount(request, env, workspace.authRevision);
+  } else {
+    identity = await accessAccount(request, env, workspace);
+  }
   // 登录身份只用于展示；所有获准身份始终进入 D1 中固定的同一个管理员工作区。
   return { id: workspace.accountId, username: identity.username };
 }

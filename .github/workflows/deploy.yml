@@ -46,6 +46,12 @@ jobs:
       GH_CLIENT_SECRET: ${{ secrets.GH_CLIENT_SECRET }}
       GH_ADMIN: ${{ vars.GH_ADMIN }}
       GH_ADMIN_ID: ${{ vars.GH_ADMIN_ID }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+      ADMIN_USERNAME: ${{ vars.ADMIN_USERNAME }}
+      LINUXDO_CLIENT_ID: ${{ vars.LINUXDO_CLIENT_ID }}
+      LINUXDO_CLIENT_SECRET: ${{ secrets.LINUXDO_CLIENT_SECRET }}
+      LINUXDO_ADMIN: ${{ vars.LINUXDO_ADMIN }}
+      LINUXDO_ADMIN_ID: ${{ vars.LINUXDO_ADMIN_ID }}
       ADMIN_EMAIL: ${{ inputs.admin_email || secrets.ADMIN_EMAIL || vars.ADMIN_EMAIL }}
       ACCESS_IDP_IDS: ${{ vars.ACCESS_IDP_IDS }}
       WORKER_NAME: ${{ vars.WORKER_NAME }}
