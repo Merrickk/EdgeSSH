@@ -2,12 +2,74 @@ import type {
   ContainerEntry, ContainerSnapshot, ContainerState, ImageEntry,
 } from './container-types';
 
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export function buildRecreateCommand(inspect: Record<string, any>, containerName: string): string {
+  const config = inspect.Config ?? {};
+  const host = inspect.HostConfig ?? {};
+  const network = inspect.NetworkSettings ?? {};
+  const args = ['docker run -d'];
+  args.push(`--name ${shellQuote(containerName)}`);
+  if (host.RestartPolicy?.Name && host.RestartPolicy.Name !== 'no') {
+    const restart = host.RestartPolicy.Name === 'unless-stopped' ? 'unless-stopped' : host.RestartPolicy.Name;
+    args.push(`--restart ${shellQuote(restart)}`);
+  }
+  if (host.Privileged) args.push('--privileged');
+  if (host.ReadonlyRootfs) args.push('--read-only');
+  if (host.NetworkMode && !['default', 'bridge'].includes(host.NetworkMode)) {
+    args.push(`--network ${shellQuote(host.NetworkMode)}`);
+  }
+  if (host.PidMode) args.push(`--pid ${shellQuote(host.PidMode)}`);
+  if (host.IpcMode) args.push(`--ipc ${shellQuote(host.IpcMode)}`);
+  if (host.UsernsMode) args.push(`--userns ${shellQuote(host.UsernsMode)}`);
+  if (host.CpusetCpus) args.push(`--cpuset-cpus ${shellQuote(host.CpusetCpus)}`);
+  if (host.NanoCpus) args.push(`--cpus ${(host.NanoCpus / 1e9).toString()}`);
+  if (host.Memory) args.push(`--memory ${host.Memory}`);
+  if (host.MemorySwap) args.push(`--memory-swap ${host.MemorySwap}`);
+  if (host.PidsLimit && host.PidsLimit > 0) args.push(`--pids-limit ${host.PidsLimit}`);
+  for (const [key, value] of Object.entries(config.Labels ?? {})) args.push(`--label ${shellQuote(`${key}=${value}`)}`);
+  for (const env of config.Env ?? []) args.push(`--env ${shellQuote(env)}`);
+  for (const [containerPort, bindings] of Object.entries(host.PortBindings ?? {})) {
+    for (const binding of (bindings as Array<{ HostIp?: string; HostPort?: string }> | null) ?? []) {
+      if (binding.HostPort) {
+        const hostIp = binding.HostIp && binding.HostIp !== '0.0.0.0' ? `${binding.HostIp}:` : '';
+        args.push(`--publish ${shellQuote(`${hostIp}${binding.HostPort}:${containerPort}`)}`);
+      }
+    }
+  }
+  for (const mount of inspect.Mounts ?? []) {
+    if (mount.Type === 'bind' || mount.Type === 'volume') {
+      const source = mount.Type === 'bind' ? mount.Source : mount.Name;
+      args.push(`--volume ${shellQuote(`${source}:${mount.Destination}${mount.RW ? '' : ':ro'}`)}`);
+    }
+  }
+  if (host.LogConfig?.Type && host.LogConfig.Type !== 'json-file') args.push(`--log-driver ${shellQuote(host.LogConfig.Type)}`);
+  for (const [key, value] of Object.entries(host.LogConfig?.Config ?? {})) args.push(`--log-opt ${shellQuote(`${key}=${value}`)}`);
+  if (config.WorkingDir) args.push(`--workdir ${shellQuote(config.WorkingDir)}`);
+  if (config.User) args.push(`--user ${shellQuote(config.User)}`);
+  if (config.Tty) args.push('--tty');
+  if (config.OpenStdin) args.push('--interactive');
+  if (config.Entrypoint) {
+    const entrypoint = Array.isArray(config.Entrypoint) ? config.Entrypoint.join(' ') : String(config.Entrypoint);
+    args.push(`--entrypoint ${shellQuote(entrypoint)}`);
+  }
+  const image = String(config.Image || inspect.Config?.Image || '');
+  if (!image) throw new Error('inspect 缺少 image 信息');
+  args.push(shellQuote(image));
+  for (const command of config.Cmd ?? []) args.push(shellQuote(String(command)));
+  const backupName = `${containerName}-edgessh-backup`;
+  const recreate = `docker stop ${shellQuote(containerName)} >/dev/null 2>&1 || true; docker rename ${shellQuote(containerName)} ${shellQuote(backupName)} && { if ${args.join(' ')}; then docker rm ${shellQuote(backupName)}; else docker rename ${shellQuote(backupName)} ${shellQuote(containerName)} && docker start ${shellQuote(containerName)} >/dev/null; exit 1; fi; }`;
+  return recreate;
+}
+
 interface LocalizedText { zh: string; en: string }
 
 /** 单个容器与镜像动作的请求类型。 */
 export type ContainerAction =
   | 'start' | 'stop' | 'restart' | 'rm' | 'rmi' | 'logs' | 'pause' | 'unpause'
-  | 'inspect' | 'pull' | 'prune_images' | 'upgrade';
+  | 'inspect' | 'pull' | 'prune_images' | 'upgrade' | 'edit';
 
 export interface ContainerManagerElements {
   panel: HTMLElement;
@@ -39,6 +101,12 @@ export interface ContainerManagerElements {
 
   // 容器升级弹窗
   upgradeDialog?: HTMLDialogElement;
+  editDialog?: HTMLDialogElement;
+  editCommand?: HTMLTextAreaElement;
+  editHint?: HTMLElement;
+  editCopy?: HTMLButtonElement;
+  editExec?: HTMLButtonElement;
+  editClose?: HTMLButtonElement;
   upgradeTitle?: HTMLElement;
   upgradeName?: HTMLElement;
   upgradeImage?: HTMLElement;
@@ -201,6 +269,12 @@ export function collectContainerManagerElements(root: ParentNode = document): Co
     imageEmpty: root.querySelector<HTMLElement>('#container-image-empty') ?? undefined,
 
     upgradeDialog: root.querySelector<HTMLDialogElement>('#container-upgrade-dialog') ?? undefined,
+    editDialog: root.querySelector<HTMLDialogElement>('#container-edit-dialog') ?? undefined,
+    editCommand: root.querySelector<HTMLTextAreaElement>('#container-edit-command') ?? undefined,
+    editHint: root.querySelector<HTMLElement>('#container-edit-hint') ?? undefined,
+    editCopy: root.querySelector<HTMLButtonElement>('#container-edit-copy') ?? undefined,
+    editExec: root.querySelector<HTMLButtonElement>('#container-edit-exec') ?? undefined,
+    editClose: root.querySelector<HTMLButtonElement>('#container-edit-close') ?? undefined,
     upgradeTitle: root.querySelector<HTMLElement>('#container-upgrade-title') ?? undefined,
     upgradeName: root.querySelector<HTMLElement>('#container-upgrade-name') ?? undefined,
     upgradeImage: root.querySelector<HTMLElement>('#container-upgrade-image') ?? undefined,
@@ -255,8 +329,11 @@ export class ContainerManager {
   private activeSubtab: 'containers' | 'images' = 'containers';
   private imageSearch = '';
   private upgradeTarget: ContainerEntry | null = null;
+  private editTarget: ContainerEntry | null = null;
   private detectedUpgrade: {
     workingDir: string;
+    project?: string;
+    configFile?: string;
     image: string;
     name: string;
     isCompose: boolean;
@@ -273,6 +350,8 @@ export class ContainerManager {
 
   constructor(private readonly options: ContainerManagerOptions) {
     this.localize = (copy) => options.getLanguage().toLowerCase().startsWith('zh') ? copy.zh : copy.en;
+    // Dialogs cannot render under a hidden workbench section even when showModal() is called.
+    if (this.elements.editDialog?.parentElement?.closest('[hidden]')) document.body.append(this.elements.editDialog);
     this.bindControls();
     this.renderDisconnected();
   }
@@ -373,6 +452,11 @@ export class ContainerManager {
         if (entry) void this.openUpgradeModal(entry);
         return;
       }
+      if (action === 'edit') {
+        const entry = this.containers.find((c) => c.id === id);
+        if (entry) void this.openEditModal(entry);
+        return;
+      }
       void this.performAction(action, id);
     }, { signal });
 
@@ -407,6 +491,10 @@ export class ContainerManager {
 
     // 升级弹窗
     this.elements.upgradeClose?.addEventListener('click', () => this.elements.upgradeDialog?.close(), { signal });
+    this.elements.editClose?.addEventListener('click', () => this.elements.editDialog?.close(), { signal });
+    this.rootEditDismiss()?.addEventListener('click', () => this.elements.editDialog?.close(), { signal });
+    this.elements.editCopy?.addEventListener('click', () => void this.copyEditCommand(), { signal });
+    this.elements.editExec?.addEventListener('click', () => void this.executeEditCommand(), { signal });
     this.elements.upgradeDismiss?.addEventListener('click', () => this.elements.upgradeDialog?.close(), { signal });
     this.elements.upgradeExec?.addEventListener('click', () => void this.handleUpgradeExec(), { signal });
     this.elements.upgradeAddCron?.addEventListener('click', () => this.handleUpgradeAddToCron(), { signal });
@@ -658,6 +746,14 @@ export class ContainerManager {
         ? [['stop', '停止'], ['restart', '重启'], ['pause', '暂停']]
         : [['start', '启动'], ['restart', '重启']];
       buttons.push(['upgrade', '升级'], ['logs', '日志'], ['rm', '删除']);
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'container-action';
+      edit.dataset.containerAction = 'edit';
+      edit.dataset.containerId = entry.id;
+      edit.textContent = '编辑';
+      edit.setAttribute('aria-label', `编辑 ${entry.name}`);
+      actions.append(edit);
       for (const [action, label] of buttons) {
         const button = document.createElement('button');
         button.type = 'button';
@@ -790,7 +886,7 @@ export class ContainerManager {
     if (this.elements.upgradeImage) this.elements.upgradeImage.textContent = entry.image;
     if (this.elements.upgradeTypeBadge) this.elements.upgradeTypeBadge.textContent = '分析中…';
     if (this.elements.upgradeHint) this.elements.upgradeHint.textContent = '正在获取容器详细信息…';
-    const defaultCmd = `docker pull ${entry.image} && docker restart ${entry.name}`;
+    const defaultCmd = `docker pull ${shellQuote(entry.image)}`;
     if (this.elements.upgradeCommand) {
       this.elements.upgradeCommand.value = defaultCmd;
     }
@@ -805,65 +901,60 @@ export class ContainerManager {
 
     if (!dialog.open) dialog.showModal();
 
-    // 尝试 inspect 容器
+    // Docker Compose labels 是识别依据。镜像名是否含斜线不代表是否由 Git 构建：
+    // `nginx:alpine` 也可能是远程镜像，`registry.local/app` 也可能是本地标签。
     try {
       const res = await this.executeAction('inspect', entry.id);
-      if (res.ok && res.stdout) {
-        let inspectData: any;
-        try { inspectData = JSON.parse(res.stdout); } catch { /* ignore */ }
-        const item = Array.isArray(inspectData) ? inspectData[0] : inspectData;
-        const labels: Record<string, string> = item?.Config?.Labels ?? {};
-        
-        let workingDir = labels['com.docker.compose.project.working_dir'] || '';
-        if (!workingDir && labels['com.docker.compose.project.config_files']) {
-          const cfg = labels['com.docker.compose.project.config_files'].split(',')[0].trim();
-          const lastSlash = cfg.lastIndexOf('/');
-          if (lastSlash > 0) workingDir = cfg.slice(0, lastSlash);
-        }
-
-        const isCompose = Boolean(workingDir || labels['com.docker.compose.project'] || labels['com.docker.compose.service']);
-
-        // Compose 升级策略：镜像名含 `/` 说明来自 Docker Hub / ghcr.io / 私有仓库等
-        // 网络地址，走 `compose pull`；否则视为本地 Dockerfile 构建产物，走 `git pull` 重新 build。
-        const isRemoteImage = entry.image.includes('/');
-
-        if (isCompose && workingDir) {
-          if (isRemoteImage) {
-            const cmd = `cd "${workingDir}" && docker compose pull && docker compose up -d`;
-            this.detectedUpgrade = {
-              workingDir, image: entry.image, name: entry.name, isCompose: true,
-              recommendedMode: 'compose_pull', recommendedCommand: cmd,
-            };
-            this.setUpgradeModeDisplay('compose_pull', cmd, 'Docker Compose (镜像更新)');
-          } else {
-            const cmd = `cd "${workingDir}" && git pull && docker compose up -d --build`;
-            this.detectedUpgrade = {
-              workingDir, image: entry.image, name: entry.name, isCompose: true,
-              recommendedMode: 'compose_git', recommendedCommand: cmd,
-            };
-            this.setUpgradeModeDisplay('compose_git', cmd, 'Docker Compose (Git 源码更新)');
-          }
-        } else if (isCompose) {
-          // 有 Compose 标签但取不到工作目录，退化为不带 cd 的命令。
-          const cmd = isRemoteImage
-            ? `docker compose pull && docker compose up -d`
-            : `git pull && docker compose up -d --build`;
-          const mode = isRemoteImage ? 'compose_pull' : 'compose_git';
-          this.detectedUpgrade = {
-            workingDir: '', image: entry.image, name: entry.name, isCompose: true,
-            recommendedMode: mode, recommendedCommand: cmd,
-          };
-          this.setUpgradeModeDisplay(mode, cmd, isRemoteImage ? 'Docker Compose (镜像更新)' : 'Docker Compose (Git 源码更新)');
-        } else {
-          this.detectedUpgrade = {
-            workingDir: '', image: entry.image, name: entry.name, isCompose: false,
-            recommendedMode: 'image_pull', recommendedCommand: defaultCmd,
-          };
-          this.setUpgradeModeDisplay('image_pull', defaultCmd, '单容器 (镜像更新)');
-        }
+      if (!res.ok || !res.stdout) throw new Error(res.stderr || 'inspect failed');
+      const parsed: unknown = JSON.parse(res.stdout);
+      const item = Array.isArray(parsed) ? parsed[0] as Record<string, any> | undefined : parsed as Record<string, any>;
+      if (!item || typeof item !== 'object') throw new Error('invalid inspect response');
+      const labels = (item.Config?.Labels ?? {}) as Record<string, string>;
+      const configFiles = String(labels['com.docker.compose.project.config_files'] ?? '');
+      const workingDirLabel = String(labels['com.docker.compose.project.working_dir'] ?? '');
+      const configFile = configFiles.split(',')[0]?.trim() ?? '';
+      const workingDir = workingDirLabel || (configFile.includes('/') ? configFile.slice(0, configFile.lastIndexOf('/')) : '');
+      const project = String(labels['com.docker.compose.project'] ?? '');
+      const service = String(labels['com.docker.compose.service'] ?? '');
+      const isCompose = Boolean(project && service);
+      const imageName = String(item.Config?.Image || entry.image);
+      const repoDigests = Array.isArray(item.RepoDigests) ? item.RepoDigests.filter((v: unknown) => typeof v === 'string') : [];
+      // RepoDigests 是 Docker 对已拉取仓库镜像的强证据；不再用斜线判断 registry，
+      // 因为 Compose 本地 build 也经常带 namespace，而官方镜像通常没有斜线。
+      const remoteImage = repoDigests.length > 0;
+      let mode: string;
+      let command: string;
+      let badge: string;
+      if (isCompose) {
+        mode = remoteImage ? 'compose_pull' : 'compose_git';
+        const prefix = workingDir ? `cd ${shellQuote(workingDir)} && ` : '';
+        // 配置文件路径可提供可靠目录；完全无法定位源码时不推荐 Git 更新，避免在错误目录 pull。
+        const projectArg = project ? ` -p ${shellQuote(project)}` : '';
+        const fileArg = configFile ? ` -f ${shellQuote(configFile)}` : '';
+        const compose = `docker compose${projectArg}${fileArg}`;
+        command = remoteImage
+          ? `${prefix}${compose} pull && ${compose} up -d`
+          : workingDir
+            ? `${prefix}git pull && ${compose} up -d --build`
+            : `${compose} up -d --build`;
+        badge = remoteImage ? 'Docker Compose (镜像更新)' : 'Docker Compose (Git 源码更新)';
+      } else {
+        mode = 'image_pull';
+        // docker restart 不会切换镜像；inspect 生成 recreate 命令并保留主要运行参数。
+        const recreate = buildRecreateCommand(item, entry.name);
+        command = `docker pull ${shellQuote(imageName)} && ${recreate}`;
+        badge = '独立容器 (保留配置重建)';
+      }
+      this.detectedUpgrade = { workingDir, project, configFile, image: imageName, name: entry.name, isCompose, recommendedMode: mode, recommendedCommand: command };
+      this.setUpgradeModeDisplay(mode, command, badge);
+      if (isCompose && !workingDir && !configFile) {
+        if (this.elements.upgradeHint) this.elements.upgradeHint.textContent = remoteImage
+          ? `检测到 Compose 项目 ${project}/${service}，将基于 Compose 标签拉取镜像；配置文件路径未记录，请确认当前目录可找到该项目。`
+          : `检测到 Compose 项目 ${project}/${service}，但没有源码目录元数据；未执行 git pull，仅生成 compose up --build 命令，请确认源码已更新。`;
       }
     } catch {
-      this.setUpgradeModeDisplay('image_pull', defaultCmd, '单容器 (镜像更新)');
+      this.setUpgradeModeDisplay('image_pull', defaultCmd, '无法识别容器参数');
+      if (this.elements.upgradeHint) this.elements.upgradeHint.textContent = '无法读取完整 inspect 元数据。本命令只拉取镜像，不会改变正在运行的容器；请重试 inspect 或使用「编辑容器」核对参数后重建。';
     }
   }
 
@@ -894,15 +985,81 @@ export class ContainerManager {
         }
       }
     } else if (mode === 'compose_git') {
-      this.elements.upgradeCommand!.value = `${dir}git pull && docker compose up -d --build`;
+      const project = this.detectedUpgrade?.project ? ` -p ${shellQuote(this.detectedUpgrade.project)}` : '';
+      const file = this.detectedUpgrade?.configFile ? ` -f ${shellQuote(this.detectedUpgrade.configFile)}` : '';
+      const compose = `docker compose${project}${file}`;
+      this.elements.upgradeCommand!.value = `${dir}git pull && ${compose} up -d --build`;
       if (this.elements.upgradeHint) this.elements.upgradeHint.textContent = '将拉取 Git 仓库最新代码并重新构建镜像启动';
     } else if (mode === 'compose_pull') {
-      this.elements.upgradeCommand!.value = `${dir}docker compose pull && docker compose up -d`;
+      const project = this.detectedUpgrade?.project ? ` -p ${shellQuote(this.detectedUpgrade.project)}` : '';
+      const file = this.detectedUpgrade?.configFile ? ` -f ${shellQuote(this.detectedUpgrade.configFile)}` : '';
+      const compose = `docker compose${project}${file}`;
+      this.elements.upgradeCommand!.value = `${dir}${compose} pull && ${compose} up -d`;
       if (this.elements.upgradeHint) this.elements.upgradeHint.textContent = '将拉取 Compose 服务的最新镜像并重启';
     } else if (mode === 'image_pull') {
-      this.elements.upgradeCommand!.value = `docker pull ${entry.image} && docker restart ${entry.name}`;
-      if (this.elements.upgradeHint) this.elements.upgradeHint.textContent = '拉取最新镜像并重启容器';
+      this.elements.upgradeCommand!.value = detected?.recommendedMode === 'image_pull'
+        ? detected.recommendedCommand : `docker pull ${shellQuote(entry.image)}`;
+      if (this.elements.upgradeHint) this.elements.upgradeHint.textContent = '单独 docker restart 不会更换镜像；推荐命令会停止并按 inspect 参数重新创建容器。';
     }
+  }
+
+  private async openEditModal(entry: ContainerEntry): Promise<void> {
+    const dialog = this.elements.editDialog;
+    if (!dialog) return;
+    this.editTarget = entry;
+    if (this.elements.editCommand) this.elements.editCommand.value = '';
+    if (this.elements.editHint) this.elements.editHint.textContent = '正在读取容器配置…';
+    if (!dialog.open) dialog.showModal();
+    try {
+      const result = await this.executeAction('inspect', entry.id);
+      if (!result.ok || !result.stdout) throw new Error(result.stderr || '读取容器配置失败');
+      const inspect = JSON.parse(result.stdout);
+      const item = Array.isArray(inspect) ? inspect[0] : inspect;
+      let command = buildRecreateCommand(item, entry.name);
+      if (item.Config?.Labels?.['com.docker.compose.project']) {
+        const project = String(item.Config.Labels['com.docker.compose.project']);
+        const labels = item.Config.Labels as Record<string, string>;
+        const configFile = String(labels['com.docker.compose.project.config_files'] ?? '').split(',')[0]?.trim();
+        const workingDir = String(labels['com.docker.compose.project.working_dir'] ?? '');
+        const configPath = configFile || (workingDir ? `${workingDir}/compose.yaml` : 'compose.yaml');
+        const fileArgs = `-p ${shellQuote(project)} -f ${shellQuote(configPath)}`;
+        command = `# Compose 项目配置由容器标签提供；编辑 ${shellQuote(configPath)} 后重建\\ndocker compose ${fileArgs} up -d --force-recreate`;
+      }
+      this.elements.editCommand!.value = command;
+      if (this.elements.editHint) this.elements.editHint.textContent = item.Config?.Labels?.['com.docker.compose.project']
+        ? '检测到 Compose 容器，命令指向原配置文件；修改 Compose 文件后重新部署。'
+        : '已带出镜像、端口、环境变量、挂载、网络、重启策略和启动命令。查看并确认后执行；Docker secrets、复杂网络别名等需人工核对。';
+    } catch (error) {
+      if (this.elements.editHint) this.elements.editHint.textContent = `读取失败：${error instanceof Error ? error.message : '未知错误'}`;
+    }
+  }
+
+  private rootEditDismiss(): HTMLButtonElement | null {
+    return this.elements.editDialog?.querySelector<HTMLButtonElement>('#container-edit-dismiss') ?? null;
+  }
+
+  private async copyEditCommand(): Promise<void> {
+    const value = this.elements.editCommand?.value ?? '';
+    if (!value) return;
+    await navigator.clipboard.writeText(value);
+    if (this.elements.editHint) this.elements.editHint.textContent = '重建命令已复制；编辑并确认后可在终端执行。';
+  }
+
+  private async executeEditCommand(): Promise<void> {
+    const command = this.elements.editCommand?.value.trim();
+    if (!command || !this.editTarget) return;
+    const accepted = await this.confirm({
+      title: { zh: `重新部署容器: ${this.editTarget.name}`, en: `Recreate container: ${this.editTarget.name}` },
+      description: { zh: '将停止并删除旧容器，再按当前编辑的 docker run 参数重新创建。操作期间服务会短暂中断；请确认挂载与端口配置正确。', en: 'Stops and removes the current container, then recreates it using the edited docker run arguments. The service will be interrupted briefly; verify mounts and ports.' },
+    });
+    if (!accepted) return;
+    this.elements.editDialog?.close();
+    this.logTarget = 'upgrade';
+    if (this.elements.logDialog && !this.elements.logDialog.open) this.elements.logDialog.showModal();
+    this.elements.logTitle.textContent = `重新部署容器: ${this.editTarget.name}`;
+    this.elements.logPath.textContent = command;
+    this.elements.logText.textContent = `[开始重新部署容器: ${this.editTarget.name}]\\n`;
+    await this.performAction('upgrade', command);
   }
 
   private async handleUpgradeExec(): Promise<void> {
@@ -1079,6 +1236,7 @@ function containerActionLabel(action: ContainerAction, localize: (copy: Localize
     pull: { zh: '拉取镜像', en: 'Pull image' },
     prune_images: { zh: '清理未用镜像', en: 'Prune images' },
     upgrade: { zh: '升级容器', en: 'Upgrade' },
+    edit: { zh: '编辑容器', en: 'Edit container' },
   };
   return localize(labels[action] ?? { zh: action, en: action });
 }

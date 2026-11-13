@@ -41,6 +41,14 @@ test('容器升级智能识别类型并支持一键添加到计划任务', async
   await openContainers(page);
 
   const row = page.locator('#container-table-body tr').filter({ hasText: 'web-nginx' });
+  await row.locator('[data-container-action="edit"]').click();
+  const editDialog = page.locator('#container-edit-dialog');
+  await expect(editDialog).toBeVisible();
+  await expect(page.locator('#container-edit-command')).toHaveValue(/docker compose/);
+  await expect(page.locator('#container-edit-command')).toHaveValue(/compose.yaml/);
+  await expect(page.locator('#container-edit-hint')).toContainText('Compose');
+  await page.locator('#container-edit-close').click();
+
   await row.locator('[data-container-action="upgrade"]').click();
 
   const dialog = page.locator('#container-upgrade-dialog');
@@ -48,18 +56,18 @@ test('容器升级智能识别类型并支持一键添加到计划任务', async
   await expect(page.locator('#container-upgrade-name')).toHaveText('web-nginx');
   await expect(page.locator('#container-upgrade-image')).toHaveText('nginx:1.25');
 
-  // nginx:1.25 不含 `/`，视为本地 Dockerfile 构建产物 → Git 源码更新
+  // 依据 Compose labels 识别；本地 build 镜像没有 RepoDigests，因此推荐 Git 更新。
   await expect(page.locator('#container-upgrade-type-badge')).toContainText('Docker Compose');
   await expect(page.locator('#container-upgrade-type-badge')).toContainText('Git 源码更新');
-  await expect(page.locator('#container-upgrade-command')).toHaveValue('cd "/opt/web-app" && git pull && docker compose up -d --build');
+  await expect(page.locator('#container-upgrade-command')).toHaveValue("cd '/opt/web-app' && git pull && docker compose -p 'web-app' -f '/opt/web-app/compose.yaml' up -d --build");
 
   // 手动切换为 Compose 镜像更新
   await page.locator('input[name="containerUpgradeMode"][value="compose_pull"]').check();
-  await expect(page.locator('#container-upgrade-command')).toHaveValue('cd "/opt/web-app" && docker compose pull && docker compose up -d');
+  await expect(page.locator('#container-upgrade-command')).toHaveValue('cd "/opt/web-app" && docker compose -p \'web-app\' -f \'/opt/web-app/compose.yaml\' pull && docker compose -p \'web-app\' -f \'/opt/web-app/compose.yaml\' up -d');
 
   // 切回智能推荐模式，应恢复为 Git 源码更新命令
   await page.locator('input[name="containerUpgradeMode"][value="auto"]').check();
-  await expect(page.locator('#container-upgrade-command')).toHaveValue('cd "/opt/web-app" && git pull && docker compose up -d --build');
+  await expect(page.locator('#container-upgrade-command')).toHaveValue("cd '/opt/web-app' && git pull && docker compose -p 'web-app' -f '/opt/web-app/compose.yaml' up -d --build");
 
   // 点击「添加到计划任务」：应自动跳转至计划任务并打开新建任务弹窗，自动填好任务名与升级命令
   await page.locator('#container-upgrade-add-cron').click();
@@ -68,29 +76,39 @@ test('容器升级智能识别类型并支持一键添加到计划任务', async
   const cronDialog = page.locator('#cron-task-dialog');
   await expect(cronDialog).toBeVisible();
   await expect(page.locator('#cron-task-name')).toHaveValue('定时升级: web-nginx');
-  await expect(page.locator('#cron-command-input')).toHaveValue('cd "/opt/web-app" && git pull && docker compose up -d --build');
+  await expect(page.locator('#cron-command-input')).toHaveValue("cd '/opt/web-app' && git pull && docker compose -p 'web-app' -f '/opt/web-app/compose.yaml' up -d --build");
   await expect(page.locator('#cron-task-schedule')).toHaveValue('0 3 * * 0');
 
   await page.locator('#cron-dialog-cancel').click();
   await expect(cronDialog).toBeHidden();
 });
 
-test('Compose 镜像名含 / 时推荐 compose pull 而非 git pull', async ({ page }) => {
+test('编辑独立容器时带出镜像、端口、环境变量和挂载参数', async ({ page }) => {
+  await fileFixture(page);
+  await openContainers(page);
+  const row = page.locator('#container-table-body tr').filter({ hasText: 'db-postgres' });
+  await row.locator('[data-container-action="edit"]').click();
+  await expect(page.locator('#container-edit-dialog')).toBeVisible();
+  await expect(page.locator('#container-edit-command')).toHaveValue(/docker run -d/);
+  await expect(page.locator('#container-edit-command')).toHaveValue(/MODE=production/);
+  await expect(page.locator('#container-edit-command')).toHaveValue(/8080:80/);
+  await expect(page.locator('#container-edit-command')).toHaveValue(/\/srv\/www/);
+  await page.locator('#container-edit-close').click();
+});
+
+test('无 Compose 标签的容器使用独立容器重建方案', async ({ page }) => {
   const fixture = await fileFixture(page);
   await openContainers(page);
-  // 覆盖 inspect 返回：镜像改为 ghcr.io/acme/web:v2（含 `/` → 网络拉取）。
-  await page.route('**/api/ssh?*', async (route) => route.abort());
-  await fixture.containerSockets[0]?.close();
-
   const row = page.locator('#container-table-body tr').filter({ hasText: 'db-postgres' });
   await row.locator('[data-container-action="upgrade"]').click();
 
   const dialog = page.locator('#container-upgrade-dialog');
   await expect(dialog).toBeVisible();
   await expect(page.locator('#container-upgrade-image')).toHaveText('postgres:16');
-  // postgres:16 不含 `/` → 本地构建，走 git pull
-  await expect(page.locator('#container-upgrade-type-badge')).toContainText('Git 源码更新');
-  await expect(page.locator('#container-upgrade-command')).toHaveValue('cd "/opt/web-app" && git pull && docker compose up -d --build');
+  // RepoDigests 不能代替 Compose labels；没有 Compose 项目标记时走独立容器重建。
+  await expect(page.locator('#container-upgrade-type-badge')).toContainText('独立容器');
+  await expect(page.locator('#container-upgrade-command')).toHaveValue(/docker pull 'postgres:16'/);
+  await expect(page.locator('#container-upgrade-command')).toHaveValue(/docker run -d/);
   await page.locator('#container-upgrade-close').click();
 });
 

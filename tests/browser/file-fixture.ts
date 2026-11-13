@@ -150,15 +150,22 @@ export async function fileFixture(page: Page, options: FileFixtureOptions = {}) 
           return;
         }
         if (message.action === 'inspect') {
+          const isDb = message.target === 'aaa111bbb222';
           const inspectData = [{
             Id: message.target,
             Config: {
-              Image: 'nginx:1.25',
-              Labels: {
+              Image: isDb ? 'postgres:16' : 'nginx:1.25',
+              Env: ['MODE=production', 'TZ=UTC'],
+              Labels: isDb ? {} : {
+                'com.docker.compose.project': 'web-app',
                 'com.docker.compose.project.working_dir': '/opt/web-app',
+                'com.docker.compose.project.config_files': '/opt/web-app/compose.yaml',
                 'com.docker.compose.service': 'web-nginx',
               },
             },
+            RepoDigests: isDb ? ['postgres@sha256:fixture'] : [],
+            HostConfig: { RestartPolicy: { Name: 'unless-stopped' }, PortBindings: { '80/tcp': [{ HostIp: '0.0.0.0', HostPort: '8080' }] }, Binds: [] },
+            Mounts: [{ Type: 'bind', Source: '/srv/www', Destination: '/usr/share/nginx/html', RW: true }],
           }];
           send({ type: 'container_action_result', requestId: message.requestId, ok: true, exitStatus: 0, stdout: JSON.stringify(inspectData), stderr: '' });
           return;
