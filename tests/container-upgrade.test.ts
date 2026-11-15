@@ -30,14 +30,19 @@ function composeInspect(image = 'nginx:1.25') {
   }];
 }
 
-test('非 Compose 容器直接选中单镜像更新，命令为 pull + restart', () => {
+test('非 Compose 容器会自动拉取镜像并按 inspect 参数重建，而不是 restart', () => {
   const detected = detectUpgradeStrategy([{ ...common, RepoDigests: [] }], entry);
   assert.equal(detected.isCompose, false);
   assert.equal(detected.recommendedMode, 'image_pull');
-  assert.equal(detected.recommendedCommand, "docker pull 'nginx:1.25' && docker restart 'web-nginx'");
-  assert.equal(detected.recommendedCommand.includes('git pull'), false);
-  assert.equal(detected.recommendedCommand.includes('docker compose'), false);
-  assert.equal(detected.recommendedCommand.includes('docker run -d'), false);
+  assert.equal(detected.recommendedCommand.includes('docker restart'), false);
+  assert.match(detected.recommendedCommand, /^docker pull 'nginx:1.25' && /);
+  assert.match(detected.recommendedCommand, /docker run -d/);
+  assert.match(detected.recommendedCommand, /MODE=production/);
+  assert.match(detected.recommendedCommand, /8080:80\/tcp/);
+  assert.match(detected.recommendedCommand, /\/srv\/www/);
+  assert.match(detected.recommendedCommand, /docker rename "\$backup" "\$name"/);
+  assert.ok(detected.recommendedCommand.length <= 2048);
+  assert.match(detected.hint, /按 inspect 参数/);
 });
 
 test('Compose 容器镜像名不含 / 时选中 Git 源码更新', () => {
@@ -69,14 +74,16 @@ test('三个单选模式分别生成对应命令，且非 Compose 手动选 Comp
   const detected = detectUpgradeStrategy(composeInspect('nginx:1.25'), entry);
   assert.match(buildUpgradeModeCommand('compose_git', entry, detected).command, /git pull && docker compose up -d --build/);
   assert.match(buildUpgradeModeCommand('compose_pull', entry, detected).command, /docker compose pull && docker compose up -d/);
-  assert.match(buildUpgradeModeCommand('image_pull', entry, detected).command, /docker pull .* && docker restart/);
+  assert.match(buildUpgradeModeCommand('image_pull', entry, detected).command, /^docker pull 'nginx:1.25' && .*docker compose up -d --force-recreate/);
 
   const standalone = detectUpgradeStrategy([{ ...common, RepoDigests: [] }], entry);
   for (const mode of ['compose_git', 'compose_pull'] as const) {
     const result = buildUpgradeModeCommand(mode, entry, standalone);
     assert.equal(result.command.includes('git pull'), false);
     assert.equal(result.command.includes('docker compose'), false);
-    assert.match(result.command, /docker pull 'nginx:1.25' && docker restart 'web-nginx'/);
+    assert.equal(result.command.includes('docker restart'), false);
+    assert.match(result.command, /^docker pull 'nginx:1.25' && /);
+    assert.match(result.command, /docker run -d/);
   }
 });
 
@@ -86,9 +93,9 @@ test('编辑容器仍按 inspect 参数重建且失败时自动回滚旧容器',
   assert.match(recreate, /MODE=production/);
   assert.match(recreate, /8080:80\/tcp/);
   assert.match(recreate, /\/srv\/www/);
-  assert.match(recreate, /docker rename 'web-nginx' 'web-nginx-edgessh-backup'/);
-  assert.match(recreate, /docker rename 'web-nginx-edgessh-backup' 'web-nginx'/);
-  assert.match(recreate, /docker start 'web-nginx'/);
+  assert.match(recreate, /docker rename "\$name" "\$backup"/);
+  assert.match(recreate, /docker rename "\$backup" "\$name"/);
+  assert.match(recreate, /docker start "\$name"/);
 });
 
 test('inspect 失败与畸形响应回退为直接 pull，不生成 git 或 compose', () => {
@@ -98,5 +105,7 @@ test('inspect 失败与畸形响应回退为直接 pull，不生成 git 或 comp
   }
   const fallback = fallbackUpgradeDetection(entry);
   assert.equal(fallback.recommendedMode, 'image_pull');
-  assert.equal(fallback.recommendedCommand, "docker pull 'nginx:1.25' && docker restart 'web-nginx'");
+  assert.equal(fallback.recommendedCommand, "docker pull 'nginx:1.25'");
+  assert.equal(fallback.recommendedCommand.includes('docker restart'), false);
+  assert.equal(fallback.recreateCommand, null);
 });

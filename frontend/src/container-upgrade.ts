@@ -3,6 +3,9 @@ import type { ContainerEntry } from './container-types';
 /** 升级弹窗的三个单选值，也是自动检测会选中的值。 */
 export type UpgradeMode = 'compose_git' | 'compose_pull' | 'image_pull';
 
+/** 与后端 buildContainerActionCommand 的 upgrade 命令上限保持一致。 */
+export const UPGRADE_COMMAND_LIMIT = 2048;
+
 export interface UpgradeDetection {
   workingDir: string;
   project: string;
@@ -15,6 +18,8 @@ export interface UpgradeDetection {
   recommendedCommand: string;
   badge: string;
   hint: string;
+  /** 独立容器按 inspect 参数重建的命令；inspect 不可用时为 null。 */
+  recreateCommand: string | null;
 }
 
 export interface UpgradeModeCommand {
@@ -50,11 +55,13 @@ function dirname(path: string): string {
   return index > 0 ? path.slice(0, index) : '';
 }
 
-/** 根据 docker inspect 生成尽量保真、且失败时自动回滚的 docker run 命令（供「编辑容器」使用）。 */
-export function buildRecreateCommand(inspect: Record<string, any>, containerName: string): string {
+/** 根据 docker inspect 生成尽量保真、且失败时自动回滚的 docker run 命令（供「编辑容器」与独立容器升级使用）。 */
+export function buildRecreateCommand(inspect: Record<string, any>, containerName: string, imageOverride?: string): string {
   const config = inspect.Config ?? {};
   const host = inspect.HostConfig ?? {};
-  const args = ['docker run -d', `--name ${shellQuote(containerName)}`];
+  const name = shellQuote(containerName);
+  const backup = shellQuote(`${containerName}-edgessh-backup`);
+  const args = ['docker run -d', '--name "$name"'];
   if (host.RestartPolicy?.Name && host.RestartPolicy.Name !== 'no') {
     args.push(`--restart ${shellQuote(String(host.RestartPolicy.Name))}`);
   }
@@ -63,6 +70,7 @@ export function buildRecreateCommand(inspect: Record<string, any>, containerName
   if (host.NetworkMode && !['default', 'bridge'].includes(host.NetworkMode)) {
     args.push(`--network ${shellQuote(String(host.NetworkMode))}`);
   }
+  if (host.PublishAllPorts) args.push('--publish-all');
   if (host.PidMode) args.push(`--pid ${shellQuote(String(host.PidMode))}`);
   if (host.IpcMode) args.push(`--ipc ${shellQuote(String(host.IpcMode))}`);
   if (host.UsernsMode) args.push(`--userns ${shellQuote(String(host.UsernsMode))}`);
@@ -72,7 +80,7 @@ export function buildRecreateCommand(inspect: Record<string, any>, containerName
   if (host.MemorySwap) args.push(`--memory-swap ${host.MemorySwap}`);
   if (host.PidsLimit && host.PidsLimit > 0) args.push(`--pids-limit ${host.PidsLimit}`);
   for (const [key, value] of Object.entries(config.Labels ?? {})) {
-    args.push(`--label ${shellQuote(`${key}=${value}`)}`);
+    args.push(`--label ${shellQuote(`${key}=${String(value)}`)}`);
   }
   for (const env of config.Env ?? []) args.push(`--env ${shellQuote(String(env))}`);
   for (const [containerPort, bindings] of Object.entries(host.PortBindings ?? {})) {
@@ -82,10 +90,15 @@ export function buildRecreateCommand(inspect: Record<string, any>, containerName
       args.push(`--publish ${shellQuote(`${hostIp}${binding.HostPort}:${containerPort}`)}`);
     }
   }
-  for (const mount of inspect.Mounts ?? []) {
+  const mounts = Array.isArray(inspect.Mounts) ? inspect.Mounts : [];
+  for (const mount of mounts) {
     if (mount.Type !== 'bind' && mount.Type !== 'volume') continue;
     const source = mount.Type === 'bind' ? mount.Source : mount.Name;
+    if (!source || !mount.Destination) continue;
     args.push(`--volume ${shellQuote(`${source}:${mount.Destination}${mount.RW ? '' : ':ro'}`)}`);
+  }
+  if (!mounts.length && Array.isArray(host.Binds)) {
+    for (const bind of host.Binds) if (typeof bind === 'string' && bind) args.push(`--volume ${shellQuote(bind)}`);
   }
   if (host.LogConfig?.Type && host.LogConfig.Type !== 'json-file') {
     args.push(`--log-driver ${shellQuote(String(host.LogConfig.Type))}`);
@@ -101,21 +114,26 @@ export function buildRecreateCommand(inspect: Record<string, any>, containerName
     const entrypoint = Array.isArray(config.Entrypoint) ? config.Entrypoint.join(' ') : String(config.Entrypoint);
     args.push(`--entrypoint ${shellQuote(entrypoint)}`);
   }
-  const image = String(config.Image || '');
+  const image = imageOverride || String(config.Image || '');
   if (!image) throw new Error('inspect 缺少 image 信息');
   args.push(shellQuote(image));
   for (const command of config.Cmd ?? []) args.push(shellQuote(String(command)));
 
-  const name = shellQuote(containerName);
-  const backup = shellQuote(`${containerName}-edgessh-backup`);
-  const run = args.join(' ');
+  // 用 shell 函数只保存一份 docker run 参数，避免重复展开导致命令过长。
   // 先把旧容器改名保留；新容器创建失败时自动恢复旧容器，避免直接 rm 后服务无法回滚。
   return [
-    `docker stop ${name} >/dev/null 2>&1 || true`,
-    `docker rm -f ${backup} >/dev/null 2>&1 || true`,
-    `if docker rename ${name} ${backup}; then`,
-    `if ${run}; then docker rm -f ${backup}; else docker rename ${backup} ${name} || true; docker start ${name} >/dev/null 2>&1 || true; exit 1; fi`,
-    `else docker rm -f ${name} >/dev/null 2>&1 || true; ${run}; fi`,
+    `name=${name}`,
+    `backup=${backup}`,
+    `was_running=$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null || true)`,
+    `run() { ${args.join(' ')}; }`,
+    'docker stop "$name" >/dev/null 2>&1 || true',
+    'docker rm -f "$backup" >/dev/null 2>&1 || true',
+    'if docker rename "$name" "$backup"; then',
+    'if run; then docker rm -f "$backup" >/dev/null 2>&1 || true; else',
+    'docker rename "$backup" "$name" || true',
+    'if [ "$was_running" = "true" ]; then docker start "$name" >/dev/null 2>&1 || true; fi',
+    'exit 1; fi',
+    'else docker rm -f "$name" >/dev/null 2>&1 || true; run; fi',
   ].join('; ');
 }
 
@@ -128,15 +146,29 @@ export function buildUpgradeModeCommand(mode: UpgradeMode, entry: UpgradeTarget,
   const pull = `docker pull ${shellQuote(image)}`;
   const prefix = detected.workingDir ? `cd ${shellQuote(detected.workingDir)} && ` : '';
   const compose = 'docker compose';
+  const recreate = detected.recreateCommand;
+  // docker restart 只重启旧容器，不会切换到新拉取的镜像；必须按原参数重建。
+  const recreateCommand = recreate ? `${pull} && ${recreate}` : pull;
+  const serviceArg = detected.service ? ` ${shellQuote(detected.service)}` : '';
+  const composeRecreate: UpgradeModeCommand = {
+    command: `${pull} && ${prefix}${compose} up -d --force-recreate --no-deps${serviceArg}`,
+    hint: '单镜像更新：先拉取当前镜像，再按 Compose 配置强制重建目标服务；不会执行 git pull。',
+    badge: '单镜像更新 (Compose 重建)',
+  };
   const single: UpgradeModeCommand = {
-    command: `${pull} && docker restart ${shellQuote(entry.name)}`,
-    hint: '非 Compose 容器：直接拉取当前镜像并重启容器。命令可编辑，例如换成新镜像标签。',
-    badge: '单容器 (镜像更新)',
+    command: recreateCommand,
+    hint: recreate
+      ? '非 Compose 容器：拉取最新镜像后，按 inspect 参数停止并重新创建容器；创建失败时会恢复旧容器。请确认端口、挂载与环境变量。'
+      : '未取得完整重建参数，本命令只拉取镜像，不会改变正在运行的容器；请使用「编辑容器」核对参数后重新部署。',
+    badge: recreate ? '单容器 (保留配置重建)' : '单容器 (仅拉取镜像)',
   };
 
-  if (mode === 'image_pull') return single;
+  if (mode === 'image_pull') {
+    // Compose 容器手动选择单镜像更新时，也必须 force-recreate 才会使用新镜像。
+    return detected.isCompose ? composeRecreate : single;
+  }
   if (!detected.isCompose) {
-    return { ...single, hint: '当前容器未检测到 Compose 标签，已回退为直接拉取镜像。' };
+    return { ...single, hint: `${single.hint} 当前容器未检测到 Compose 标签，已回退为单容器模式。` };
   }
   if (mode === 'compose_pull') {
     return {
@@ -153,7 +185,17 @@ export function buildUpgradeModeCommand(mode: UpgradeMode, entry: UpgradeTarget,
 }
 
 function finishDetection(base: UpgradeDetection, entry: UpgradeTarget): UpgradeDetection {
-  const result = buildUpgradeModeCommand(base.recommendedMode, entry, base);
+  let result = buildUpgradeModeCommand(base.recommendedMode, entry, base);
+  // 单容器重建命令可能超过后端 2048 字节限制；保留可执行的 pull，并提示使用编辑容器。
+  if (result.command.length > UPGRADE_COMMAND_LIMIT) {
+    const image = base.image || entry.image;
+    base.recreateCommand = null;
+    result = {
+      command: `docker pull ${shellQuote(image)}`,
+      hint: '容器参数过多导致重建命令超过长度限制；本命令只拉取镜像。请使用「编辑容器」复制重建命令后手动执行，或精简环境变量与标签。',
+      badge: '单容器 (仅拉取镜像)',
+    };
+  }
   return { ...base, recommendedCommand: result.command, badge: result.badge, hint: result.hint };
 }
 
@@ -181,10 +223,15 @@ export function detectUpgradeStrategy(inspect: unknown, entry: UpgradeTarget): U
   const recommendedMode: UpgradeMode = !isCompose
     ? 'image_pull'
     : image.includes('/') ? 'compose_pull' : 'compose_git';
+  let recreateCommand: string | null = null;
+  if (!isCompose) {
+    try { recreateCommand = buildRecreateCommand(item, entry.name, image); }
+    catch { recreateCommand = null; }
+  }
   return finishDetection({
     workingDir, project, configFile, service, image, name: entry.name, isCompose,
     recommendedMode,
-    recommendedCommand: '', badge: '', hint: '',
+    recommendedCommand: '', badge: '', hint: '', recreateCommand,
   }, entry);
 }
 
@@ -193,7 +240,7 @@ export function fallbackUpgradeDetection(entry: UpgradeTarget): UpgradeDetection
     workingDir: '', project: '', configFile: '', service: '',
     image: entry.image, name: entry.name, isCompose: false,
     recommendedMode: 'image_pull',
-    recommendedCommand: '', badge: '', hint: '',
+    recommendedCommand: '', badge: '', hint: '', recreateCommand: null,
   }, entry);
   return {
     ...detection,
