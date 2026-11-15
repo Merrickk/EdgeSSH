@@ -69,6 +69,11 @@ test('容器升级智能识别类型并支持一键添加到计划任务', async
   await page.locator('input[name="containerUpgradeMode"][value="auto"]').check();
   await expect(page.locator('#container-upgrade-command')).toHaveValue(composePull);
 
+  // 手动本地构建模式不执行 git pull，适合本地源码已更新的 Compose 项目。
+  await page.locator('input[name="containerUpgradeMode"][value="compose_build"]').check();
+  await expect(page.locator('#container-upgrade-command')).toHaveValue("cd '/opt/web-app' && docker compose -p 'web-app' -f '/opt/web-app/compose.yaml' up -d --build");
+  await expect(page.locator('#container-upgrade-command')).not.toHaveValue(/git pull/);
+
   // 只有明确选择手动 Git 模式才生成 git pull 命令。
   await page.locator('input[name="containerUpgradeMode"][value="compose_git"]').check();
   await expect(page.locator('#container-upgrade-command')).toHaveValue("cd '/opt/web-app' && git pull && docker compose -p 'web-app' -f '/opt/web-app/compose.yaml' up -d --build");

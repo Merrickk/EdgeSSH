@@ -1,7 +1,7 @@
 import type { ContainerEntry } from './container-types';
 
 export type RecommendedUpgradeMode = 'compose_pull' | 'image_pull';
-export type UpgradeMode = 'auto' | RecommendedUpgradeMode | 'compose_git';
+export type UpgradeMode = 'auto' | RecommendedUpgradeMode | 'compose_build' | 'compose_git';
 
 export interface UpgradeDetection {
   workingDir: string;
@@ -194,6 +194,17 @@ export function buildUpgradeModeCommand(mode: UpgradeMode, entry: UpgradeTarget,
   }
   const compose = `docker compose${detected.composeArgs}`;
   const prefix = detected.workingDir ? `cd ${shellQuote(detected.workingDir)} && ` : '';
+  if (mode !== 'image_pull' && !detected.isCompose) {
+    const fallback = buildUpgradeModeCommand('image_pull', entry, detected);
+    return { ...fallback, badge: '手动模式不适用：已回退到单镜像更新', hint: 'Git / 本地构建模式仅适用于 Docker Compose 项目；该容器不是 Compose 容器，已回退到安全的镜像更新。' };
+  }
+  if (mode === 'compose_build') {
+    return {
+      command: `${prefix}${compose} up -d --build`,
+      hint: '手动本地构建模式：不执行 git pull，直接按当前目录的 Dockerfile 重新构建镜像并启动；适合本地源码已更新的 Compose 项目。',
+      badge: '手动选择：Compose 本地构建',
+    };
+  }
   if (mode === 'compose_git') {
     return {
       command: `${prefix}git pull && ${compose} up -d --build`,

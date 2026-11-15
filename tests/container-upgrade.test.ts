@@ -36,6 +36,9 @@ test('Compose 容器智能升级永远推荐 compose pull，不自动选择 git 
   assert.match(detected.recommendedCommand, /docker compose -p 'web-app' -f '\/opt\/web-app\/compose.yaml' pull/);
   const auto = buildUpgradeModeCommand('auto', entry, detected);
   assert.equal(auto.command, detected.recommendedCommand);
+  const localBuild = buildUpgradeModeCommand('compose_build', entry, detected);
+  assert.equal(localBuild.command.includes('git pull'), false);
+  assert.match(localBuild.command, /docker compose -p 'web-app' -f '\/opt\/web-app\/compose.yaml' up -d --build/);
   const git = buildUpgradeModeCommand('compose_git', entry, detected);
   assert.match(git.command, /^cd '\/opt\/web-app' && git pull && docker compose/);
   assert.match(git.hint, /手动 Git 模式/);
@@ -71,6 +74,16 @@ test('独立容器按 inspect 参数重建且失败时自动回滚旧容器', ()
   assert.match(recreate, /docker rename 'web-nginx' 'web-nginx-edgessh-backup'/);
   assert.match(recreate, /docker rename 'web-nginx-edgessh-backup' 'web-nginx'/);
   assert.match(recreate, /docker start 'web-nginx'/);
+});
+
+test('独立容器误选 Compose / Git 手动模式时回退到安全的镜像更新', () => {
+  const detected = detectUpgradeStrategy([{ ...common, RepoDigests: [] }], entry);
+  for (const mode of ['compose_build', 'compose_git', 'compose_pull'] as const) {
+    const result = buildUpgradeModeCommand(mode, entry, detected);
+    assert.equal(result.command.includes('git pull'), false, `mode=${mode}`);
+    assert.equal(result.command.includes('docker compose'), false, `mode=${mode}`);
+    assert.match(result.command, /docker pull 'nginx:1.25'/);
+  }
 });
 
 test('inspect 失败与畸形响应只回退到安全的 pull，不生成 git pull', () => {
