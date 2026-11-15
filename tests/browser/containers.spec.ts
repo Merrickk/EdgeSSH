@@ -36,8 +36,8 @@ test('容器页入口、连接与列表渲染', async ({ page }, testInfo) => {
   await page.screenshot({ path: testInfo.outputPath('containers-list.png'), fullPage: true });
 });
 
-test('容器升级智能识别类型并支持一键添加到计划任务', async ({ page }) => {
-  const fixture = await fileFixture(page);
+test('容器升级按 Compose 与镜像名自动选中模式，并支持一键添加到计划任务', async ({ page }) => {
+  const fixture = await fileFixture(page, { webImage: 'ghcr.io/acme/web:v2' });
   await openContainers(page);
 
   const row = page.locator('#container-table-body tr').filter({ hasText: 'web-nginx' });
@@ -54,42 +54,29 @@ test('容器升级智能识别类型并支持一键添加到计划任务', async
   const dialog = page.locator('#container-upgrade-dialog');
   await expect(dialog).toBeVisible();
   await expect(page.locator('#container-upgrade-name')).toHaveText('web-nginx');
-  await expect(page.locator('#container-upgrade-image')).toHaveText('nginx:1.25');
+  await expect(page.locator('#container-upgrade-image')).toHaveText('ghcr.io/acme/web:v2');
 
-  // 智能模式对 Compose 容器固定推荐镜像更新，即使没有 RepoDigests 也不自动 git pull。
-  const composePull = "cd '/opt/web-app' && docker compose -p 'web-app' -f '/opt/web-app/compose.yaml' pull && docker compose -p 'web-app' -f '/opt/web-app/compose.yaml' up -d";
-  await expect(page.locator('#container-upgrade-type-badge')).toContainText('Docker Compose');
+  // 无智能推荐单项；Compose 容器且镜像名含 /，自动选中 compose_pull。
+  await expect(page.locator('input[name="containerUpgradeMode"][value="auto"]')).toHaveCount(0);
   await expect(page.locator('#container-upgrade-type-badge')).toContainText('镜像更新');
-  await expect(page.locator('input[name="containerUpgradeMode"][value="auto"]')).toBeChecked();
+  await expect(page.locator('input[name="containerUpgradeMode"][value="compose_pull"]')).toBeChecked();
+  const composePull = "cd '/opt/web-app' && docker compose pull && docker compose up -d";
   await expect(page.locator('#container-upgrade-command')).toHaveValue(composePull);
 
-  // 手动切换为镜像更新，命令一致；切回智能模式仍不含 git pull。
+  // 手动切到 Git 模式再切回，命令与选中项保持一致。
+  await page.locator('input[name="containerUpgradeMode"][value="compose_git"]').check();
+  await expect(page.locator('#container-upgrade-command')).toHaveValue("cd '/opt/web-app' && git pull && docker compose up -d --build");
   await page.locator('input[name="containerUpgradeMode"][value="compose_pull"]').check();
   await expect(page.locator('#container-upgrade-command')).toHaveValue(composePull);
-  await page.locator('input[name="containerUpgradeMode"][value="auto"]').check();
-  await expect(page.locator('#container-upgrade-command')).toHaveValue(composePull);
 
-  // 手动本地构建模式不执行 git pull，适合本地源码已更新的 Compose 项目。
-  await page.locator('input[name="containerUpgradeMode"][value="compose_build"]').check();
-  await expect(page.locator('#container-upgrade-command')).toHaveValue("cd '/opt/web-app' && docker compose -p 'web-app' -f '/opt/web-app/compose.yaml' up -d --build");
-  await expect(page.locator('#container-upgrade-command')).not.toHaveValue(/git pull/);
-
-  // 只有明确选择手动 Git 模式才生成 git pull 命令。
-  await page.locator('input[name="containerUpgradeMode"][value="compose_git"]').check();
-  await expect(page.locator('#container-upgrade-command')).toHaveValue("cd '/opt/web-app' && git pull && docker compose -p 'web-app' -f '/opt/web-app/compose.yaml' up -d --build");
-  await page.locator('input[name="containerUpgradeMode"][value="auto"]').check();
-  await expect(page.locator('#container-upgrade-command')).toHaveValue(composePull);
-
-  // 点击「添加到计划任务」：应自动跳转至计划任务并打开新建任务弹窗，自动填好任务名与升级命令
+  // 添加到计划任务时带上当前命令。
   await page.locator('#container-upgrade-add-cron').click();
   await expect(dialog).toBeHidden();
-
   const cronDialog = page.locator('#cron-task-dialog');
   await expect(cronDialog).toBeVisible();
   await expect(page.locator('#cron-task-name')).toHaveValue('定时升级: web-nginx');
   await expect(page.locator('#cron-command-input')).toHaveValue(composePull);
   await expect(page.locator('#cron-task-schedule')).toHaveValue('0 3 * * 0');
-
   await page.locator('#cron-dialog-cancel').click();
   await expect(cronDialog).toBeHidden();
 });
@@ -107,19 +94,29 @@ test('编辑独立容器时带出镜像、端口、环境变量和挂载参数',
   await page.locator('#container-edit-close').click();
 });
 
-test('无 Compose 标签的容器使用独立容器重建方案', async ({ page }) => {
-  const fixture = await fileFixture(page);
+test('Compose 镜像名不含 / 时自动选中 Git 源码更新', async ({ page }) => {
+  await fileFixture(page);
+  await openContainers(page);
+  const row = page.locator('#container-table-body tr').filter({ hasText: 'web-nginx' });
+  await row.locator('[data-container-action="upgrade"]').click();
+  await expect(page.locator('#container-upgrade-image')).toHaveText('nginx:1.25');
+  await expect(page.locator('#container-upgrade-type-badge')).toContainText('Git 源码更新');
+  await expect(page.locator('input[name="containerUpgradeMode"][value="compose_git"]')).toBeChecked();
+  await expect(page.locator('#container-upgrade-command')).toHaveValue("cd '/opt/web-app' && git pull && docker compose up -d --build");
+  await page.locator('#container-upgrade-close').click();
+});
+
+test('单个非 Compose 容器直接拉取镜像', async ({ page }) => {
+  await fileFixture(page, { dbCompose: false });
   await openContainers(page);
   const row = page.locator('#container-table-body tr').filter({ hasText: 'db-postgres' });
   await row.locator('[data-container-action="upgrade"]').click();
-
   const dialog = page.locator('#container-upgrade-dialog');
   await expect(dialog).toBeVisible();
   await expect(page.locator('#container-upgrade-image')).toHaveText('postgres:16');
-  // RepoDigests 不能代替 Compose labels；没有 Compose 项目标记时走独立容器重建。
-  await expect(page.locator('#container-upgrade-type-badge')).toContainText('独立容器');
-  await expect(page.locator('#container-upgrade-command')).toHaveValue(/docker pull 'postgres:16'/);
-  await expect(page.locator('#container-upgrade-command')).toHaveValue(/docker run -d/);
+  await expect(page.locator('#container-upgrade-type-badge')).toContainText('单容器');
+  await expect(page.locator('input[name="containerUpgradeMode"][value="image_pull"]')).toBeChecked();
+  await expect(page.locator('#container-upgrade-command')).toHaveValue("docker pull 'postgres:16' && docker restart 'db-postgres'");
   await page.locator('#container-upgrade-close').click();
 });
 

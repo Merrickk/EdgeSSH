@@ -7,6 +7,10 @@ export interface FileFixtureOptions {
   holdUpload?: boolean;
   /** 推迟到调用方注册完自己的 /api 路由后再 navigate()。 */
   skipNavigate?: boolean;
+  /** 覆盖容器快照中 web-nginx 的镜像名，用于升级策略测试。 */
+  webImage?: string;
+  /** 让 db-postgres 也带 Compose 标签，用于区分镜像名与 Compose 识别。 */
+  dbCompose?: boolean;
 }
 import { parseContainerFrame } from '../../src/backend/container-command.ts';
 
@@ -131,7 +135,7 @@ export async function fileFixture(page: Page, options: FileFixtureOptions = {}) 
         send({ type: 'container_ready' });
         // 与真实后端一致：把标记帧交给解析器，再把 JSON 快照发给前端。
         const frame = [
-          'abc123def456\tweb-nginx\tnginx:1.25\trunning\tUp 3 hours\t2026-09-20 09:00\t0.0.0.0:80->80/tcp',
+          `abc123def456\tweb-nginx\t${options.webImage ?? 'nginx:1.25'}\trunning\tUp 3 hours\t2026-09-20 09:00\t0.0.0.0:80->80/tcp`,
           'aaa111bbb222\tdb-postgres\tpostgres:16\texited\tExited (0) 2 hours ago\t2026-09-18 12:00\t',
           '__CF_WEBSSH_STATS__',
           'abc123def456\t0.05%\t32MiB / 1GiB\t3.12%\t1.2kB / 3.4kB\t8MB / 12MB\t12',
@@ -151,16 +155,17 @@ export async function fileFixture(page: Page, options: FileFixtureOptions = {}) 
         }
         if (message.action === 'inspect') {
           const isDb = message.target === 'aaa111bbb222';
+          const isCompose = !isDb || options.dbCompose;
           const inspectData = [{
             Id: message.target,
             Config: {
               Image: isDb ? 'postgres:16' : 'nginx:1.25',
               Env: ['MODE=production', 'TZ=UTC'],
-              Labels: isDb ? {} : {
+              Labels: !isCompose ? {} : {
                 'com.docker.compose.project': 'web-app',
                 'com.docker.compose.project.working_dir': '/opt/web-app',
                 'com.docker.compose.project.config_files': '/opt/web-app/compose.yaml',
-                'com.docker.compose.service': 'web-nginx',
+                'com.docker.compose.service': isDb ? 'db-postgres' : 'web-nginx',
               },
             },
             RepoDigests: isDb ? ['postgres@sha256:fixture'] : [],

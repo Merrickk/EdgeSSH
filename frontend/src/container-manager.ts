@@ -4,7 +4,7 @@ import type {
 import {
   buildRecreateCommand, buildUpgradeModeCommand, detectUpgradeStrategy,
   fallbackUpgradeDetection, shellQuote,
-  type UpgradeDetection, type UpgradeMode, type RecommendedUpgradeMode,
+  type UpgradeDetection, type UpgradeMode,
 } from './container-upgrade';
 
 interface LocalizedText { zh: string; en: string }
@@ -840,12 +840,12 @@ export class ContainerManager {
     if (this.elements.upgradeHint) this.elements.upgradeHint.textContent = detection.hint;
   }
 
-  private setUpgradeModeDisplay(_mode: RecommendedUpgradeMode, command: string, badgeText: string): void {
+  private setUpgradeModeDisplay(mode: UpgradeMode, command: string, badgeText: string): void {
     if (this.elements.upgradeTypeBadge) this.elements.upgradeTypeBadge.textContent = badgeText;
     if (this.elements.upgradeCommand) this.elements.upgradeCommand.value = command;
-    if (this.elements.upgradeHint) this.elements.upgradeHint.textContent = `智能推荐：${badgeText}`;
-    const auto = this.elements.upgradeDialog?.querySelector<HTMLInputElement>('input[name="containerUpgradeMode"][value="auto"]');
-    if (auto) auto.checked = true;
+    if (this.elements.upgradeHint) this.elements.upgradeHint.textContent = `已自动选择：${badgeText}`;
+    const radio = this.elements.upgradeDialog?.querySelector<HTMLInputElement>(`input[name="containerUpgradeMode"][value="${mode}"]`);
+    if (radio) radio.checked = true;
   }
 
   private updateUpgradeCommandFromMode(mode: UpgradeMode): void {

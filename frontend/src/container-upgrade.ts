@@ -1,7 +1,7 @@
 import type { ContainerEntry } from './container-types';
 
-export type RecommendedUpgradeMode = 'compose_pull' | 'image_pull';
-export type UpgradeMode = 'auto' | RecommendedUpgradeMode | 'compose_build' | 'compose_git';
+/** 升级弹窗的三个单选值，也是自动检测会选中的值。 */
+export type UpgradeMode = 'compose_git' | 'compose_pull' | 'image_pull';
 
 export interface UpgradeDetection {
   workingDir: string;
@@ -11,13 +11,10 @@ export interface UpgradeDetection {
   image: string;
   name: string;
   isCompose: boolean;
-  recommendedMode: RecommendedUpgradeMode;
+  recommendedMode: UpgradeMode;
   recommendedCommand: string;
   badge: string;
   hint: string;
-  composeArgs: string;
-  inspectAvailable: boolean;
-  recreateCommand: string | null;
 }
 
 export interface UpgradeModeCommand {
@@ -40,8 +37,7 @@ function asRecord(value: unknown): InspectRecord | null {
 function inspectItem(value: unknown): InspectRecord | null {
   const candidate = Array.isArray(value) ? value[0] : value;
   const item = asRecord(candidate);
-  if (!item || !asRecord(item.Config)) return null;
-  return item;
+  return item && asRecord(item.Config) ? item : null;
 }
 
 function label(labels: Record<string, unknown>, key: string): string {
@@ -54,7 +50,7 @@ function dirname(path: string): string {
   return index > 0 ? path.slice(0, index) : '';
 }
 
-/** 根据 docker inspect 生成尽量保真、且失败时自动回滚的 docker run 命令。 */
+/** 根据 docker inspect 生成尽量保真、且失败时自动回滚的 docker run 命令（供「编辑容器」使用）。 */
 export function buildRecreateCommand(inspect: Record<string, any>, containerName: string): string {
   const config = inspect.Config ?? {};
   const host = inspect.HostConfig ?? {};
@@ -124,114 +120,84 @@ export function buildRecreateCommand(inspect: Record<string, any>, containerName
 }
 
 /**
- * 智能升级策略只做安全、可预测的选择：
- * - Compose 容器默认 compose pull + up -d，绝不因为 RepoDigests 为空或镜像名格式而自动 Git；
- * - 独立容器默认 pull 镜像并按 inspect 参数重建；
- * - Git 源码更新只保留为明确手动选择的模式。
+ * 生成某个升级模式对应的命令。
+ * 目录可定位时先 cd 到 Compose 工作目录，其余保持简洁、可手工编辑。
+ */
+export function buildUpgradeModeCommand(mode: UpgradeMode, entry: UpgradeTarget, detected: UpgradeDetection): UpgradeModeCommand {
+  const image = detected.image || entry.image;
+  const pull = `docker pull ${shellQuote(image)}`;
+  const prefix = detected.workingDir ? `cd ${shellQuote(detected.workingDir)} && ` : '';
+  const compose = 'docker compose';
+  const single: UpgradeModeCommand = {
+    command: `${pull} && docker restart ${shellQuote(entry.name)}`,
+    hint: '非 Compose 容器：直接拉取当前镜像并重启容器。命令可编辑，例如换成新镜像标签。',
+    badge: '单容器 (镜像更新)',
+  };
+
+  if (mode === 'image_pull') return single;
+  if (!detected.isCompose) {
+    return { ...single, hint: '当前容器未检测到 Compose 标签，已回退为直接拉取镜像。' };
+  }
+  if (mode === 'compose_pull') {
+    return {
+      command: `${prefix}${compose} pull && ${compose} up -d`,
+      hint: `镜像名 ${image} 含 /，按远程镜像 Compose 项目处理：拉取最新镜像并重建服务。`,
+      badge: 'Docker Compose (镜像更新)',
+    };
+  }
+  return {
+    command: `${prefix}git pull && ${compose} up -d --build`,
+    hint: `镜像名 ${image} 不含 /，按本地构建 Compose 项目处理：拉取源码并重新构建。`,
+    badge: 'Docker Compose (Git 源码更新)',
+  };
+}
+
+function finishDetection(base: UpgradeDetection, entry: UpgradeTarget): UpgradeDetection {
+  const result = buildUpgradeModeCommand(base.recommendedMode, entry, base);
+  return { ...base, recommendedCommand: result.command, badge: result.badge, hint: result.hint };
+}
+
+/**
+ * 识别规则：
+ * 1. 先看 Docker Compose 标签；不是 Compose 容器 → 直接 pull（单镜像更新）；
+ * 2. 是 Compose 容器且镜像名含 `/` → compose pull + up；
+ * 3. 是 Compose 容器且镜像名不含 `/` → git pull + up --build。
+ *
+ * 镜像名以列表显示的 `entry.image` 为准，与用户在界面上看到的名字一致；
+ * inspect 仅用于判断是否 Compose、取工作目录和配置文件路径。
  */
 export function detectUpgradeStrategy(inspect: unknown, entry: UpgradeTarget): UpgradeDetection {
   const item = inspectItem(inspect);
   if (!item) return fallbackUpgradeDetection(entry);
-  const config = asRecord(item.Config) ?? {};
+  const config = asRecord(item.Config)!;
   const labels = asRecord(config.Labels) ?? {};
   const project = label(labels, 'com.docker.compose.project');
   const service = label(labels, 'com.docker.compose.service');
   const configFiles = label(labels, 'com.docker.compose.project.config_files');
   const configFile = configFiles.split(',')[0]?.trim() ?? '';
-  const workingDirLabel = label(labels, 'com.docker.compose.project.working_dir');
-  const workingDir = workingDirLabel || dirname(configFile);
+  const workingDir = label(labels, 'com.docker.compose.project.working_dir') || dirname(configFile);
   const isCompose = Boolean(project || service || configFile || workingDir);
-  const image = String(config.Image || entry.image);
-  const composeArgs = `${project ? ` -p ${shellQuote(project)}` : ''}${configFile ? ` -f ${shellQuote(configFile)}` : ''}`;
-  const compose = `docker compose${composeArgs}`;
-  const prefix = workingDir ? `cd ${shellQuote(workingDir)} && ` : '';
-  let recreateCommand: string | null = null;
-  try { recreateCommand = buildRecreateCommand(item, entry.name); }
-  catch { recreateCommand = null; }
-
-  const common = {
-    workingDir, project, configFile, service, image, name: entry.name,
-    isCompose, composeArgs, inspectAvailable: true, recreateCommand,
-  };
-
-  if (isCompose) {
-    return {
-      ...common,
-      recommendedMode: 'compose_pull',
-      recommendedCommand: `${prefix}${compose} pull && ${compose} up -d`,
-      badge: 'Docker Compose (镜像更新)',
-      hint: '智能模式默认只拉取 Compose 服务镜像并重建，不自动执行 git pull；源码构建项目请手动选择「Git 源码更新」并确认工作目录。',
-    };
-  }
-  return {
-    ...common,
-    recommendedMode: 'image_pull',
-    recommendedCommand: recreateCommand
-      ? `docker pull ${shellQuote(image)} && ${recreateCommand}`
-      : `docker pull ${shellQuote(image)}`,
-    badge: recreateCommand ? '独立容器 (保留配置重建)' : '独立容器 (仅拉取镜像)',
-    hint: recreateCommand
-      ? '已按 inspect 参数生成重建命令，升级会停止旧容器并创建同配置的新容器；请确认端口、挂载和环境变量后执行。'
-      : 'inspect 未包含完整运行参数，智能模式只拉取镜像，不会改变正在运行的容器；请使用「编辑容器」核对参数后重建。',
-  };
+  const image = entry.image || String(config.Image || '');
+  const recommendedMode: UpgradeMode = !isCompose
+    ? 'image_pull'
+    : image.includes('/') ? 'compose_pull' : 'compose_git';
+  return finishDetection({
+    workingDir, project, configFile, service, image, name: entry.name, isCompose,
+    recommendedMode,
+    recommendedCommand: '', badge: '', hint: '',
+  }, entry);
 }
 
 export function fallbackUpgradeDetection(entry: UpgradeTarget): UpgradeDetection {
-  return {
+  const detection = finishDetection({
     workingDir: '', project: '', configFile: '', service: '',
     image: entry.image, name: entry.name, isCompose: false,
     recommendedMode: 'image_pull',
-    recommendedCommand: `docker pull ${shellQuote(entry.image)}`,
-    badge: '无法识别容器参数',
-    hint: '无法读取 inspect 元数据。本命令只拉取镜像，不会改变正在运行的容器；请重试或使用「编辑容器」核对参数后重建。',
-    composeArgs: '', inspectAvailable: false, recreateCommand: null,
-  };
-}
-
-export function buildUpgradeModeCommand(mode: UpgradeMode, entry: UpgradeTarget, detected: UpgradeDetection): UpgradeModeCommand {
-  if (mode === 'auto') {
-    return { command: detected.recommendedCommand, hint: detected.hint, badge: detected.badge };
-  }
-  const compose = `docker compose${detected.composeArgs}`;
-  const prefix = detected.workingDir ? `cd ${shellQuote(detected.workingDir)} && ` : '';
-  if (mode !== 'image_pull' && !detected.isCompose) {
-    const fallback = buildUpgradeModeCommand('image_pull', entry, detected);
-    return { ...fallback, badge: '手动模式不适用：已回退到单镜像更新', hint: 'Git / 本地构建模式仅适用于 Docker Compose 项目；该容器不是 Compose 容器，已回退到安全的镜像更新。' };
-  }
-  if (mode === 'compose_build') {
-    return {
-      command: `${prefix}${compose} up -d --build`,
-      hint: '手动本地构建模式：不执行 git pull，直接按当前目录的 Dockerfile 重新构建镜像并启动；适合本地源码已更新的 Compose 项目。',
-      badge: '手动选择：Compose 本地构建',
-    };
-  }
-  if (mode === 'compose_git') {
-    return {
-      command: `${prefix}git pull && ${compose} up -d --build`,
-      hint: '手动 Git 模式：仅当工作目录确实是 Git 仓库且服务由源码 build 时使用；普通镜像容器请回到智能模式。',
-      badge: '手动选择：Git 源码更新',
-    };
-  }
-  if (mode === 'compose_pull') {
-    return {
-      command: `${prefix}${compose} pull && ${compose} up -d`,
-      hint: '将拉取 Compose 服务的最新镜像并按 Compose 配置重启。',
-      badge: '手动选择：Compose 镜像更新',
-    };
-  }
-  const imagePull = `docker pull ${shellQuote(detected.image)}`;
-  if (detected.isCompose) {
-    return {
-      command: `${imagePull} && ${prefix}${compose} up -d --force-recreate`,
-      hint: '手动单镜像模式：拉取当前镜像后按 Compose 配置强制重建；不会执行 git pull。',
-      badge: '手动选择：单镜像更新',
-    };
-  }
+    recommendedCommand: '', badge: '', hint: '',
+  }, entry);
   return {
-    command: detected.recreateCommand ? `${imagePull} && ${detected.recreateCommand}` : imagePull,
-    hint: detected.recreateCommand
-      ? '手动单镜像模式：拉取镜像后按 inspect 参数重建；请确认端口、挂载和环境变量。'
-      : 'inspect 未包含完整运行参数，只能拉取镜像；请使用「编辑容器」核对参数后重建。',
-    badge: '手动选择：单镜像更新',
+    ...detection,
+    hint: '无法读取容器 inspect 元数据，已按非 Compose 容器直接拉取镜像；请确认容器类型后再执行。',
+    badge: '无法识别，按单容器处理',
   };
 }
