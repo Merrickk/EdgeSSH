@@ -56,18 +56,24 @@ test('容器升级智能识别类型并支持一键添加到计划任务', async
   await expect(page.locator('#container-upgrade-name')).toHaveText('web-nginx');
   await expect(page.locator('#container-upgrade-image')).toHaveText('nginx:1.25');
 
-  // 依据 Compose labels 识别；本地 build 镜像没有 RepoDigests，因此推荐 Git 更新。
+  // 智能模式对 Compose 容器固定推荐镜像更新，即使没有 RepoDigests 也不自动 git pull。
+  const composePull = "cd '/opt/web-app' && docker compose -p 'web-app' -f '/opt/web-app/compose.yaml' pull && docker compose -p 'web-app' -f '/opt/web-app/compose.yaml' up -d";
   await expect(page.locator('#container-upgrade-type-badge')).toContainText('Docker Compose');
-  await expect(page.locator('#container-upgrade-type-badge')).toContainText('Git 源码更新');
-  await expect(page.locator('#container-upgrade-command')).toHaveValue("cd '/opt/web-app' && git pull && docker compose -p 'web-app' -f '/opt/web-app/compose.yaml' up -d --build");
+  await expect(page.locator('#container-upgrade-type-badge')).toContainText('镜像更新');
+  await expect(page.locator('input[name="containerUpgradeMode"][value="auto"]')).toBeChecked();
+  await expect(page.locator('#container-upgrade-command')).toHaveValue(composePull);
 
-  // 手动切换为 Compose 镜像更新
+  // 手动切换为镜像更新，命令一致；切回智能模式仍不含 git pull。
   await page.locator('input[name="containerUpgradeMode"][value="compose_pull"]').check();
-  await expect(page.locator('#container-upgrade-command')).toHaveValue('cd "/opt/web-app" && docker compose -p \'web-app\' -f \'/opt/web-app/compose.yaml\' pull && docker compose -p \'web-app\' -f \'/opt/web-app/compose.yaml\' up -d');
-
-  // 切回智能推荐模式，应恢复为 Git 源码更新命令
+  await expect(page.locator('#container-upgrade-command')).toHaveValue(composePull);
   await page.locator('input[name="containerUpgradeMode"][value="auto"]').check();
+  await expect(page.locator('#container-upgrade-command')).toHaveValue(composePull);
+
+  // 只有明确选择手动 Git 模式才生成 git pull 命令。
+  await page.locator('input[name="containerUpgradeMode"][value="compose_git"]').check();
   await expect(page.locator('#container-upgrade-command')).toHaveValue("cd '/opt/web-app' && git pull && docker compose -p 'web-app' -f '/opt/web-app/compose.yaml' up -d --build");
+  await page.locator('input[name="containerUpgradeMode"][value="auto"]').check();
+  await expect(page.locator('#container-upgrade-command')).toHaveValue(composePull);
 
   // 点击「添加到计划任务」：应自动跳转至计划任务并打开新建任务弹窗，自动填好任务名与升级命令
   await page.locator('#container-upgrade-add-cron').click();
@@ -76,7 +82,7 @@ test('容器升级智能识别类型并支持一键添加到计划任务', async
   const cronDialog = page.locator('#cron-task-dialog');
   await expect(cronDialog).toBeVisible();
   await expect(page.locator('#cron-task-name')).toHaveValue('定时升级: web-nginx');
-  await expect(page.locator('#cron-command-input')).toHaveValue("cd '/opt/web-app' && git pull && docker compose -p 'web-app' -f '/opt/web-app/compose.yaml' up -d --build");
+  await expect(page.locator('#cron-command-input')).toHaveValue(composePull);
   await expect(page.locator('#cron-task-schedule')).toHaveValue('0 3 * * 0');
 
   await page.locator('#cron-dialog-cancel').click();
