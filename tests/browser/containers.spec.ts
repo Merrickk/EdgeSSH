@@ -106,7 +106,7 @@ test('Compose 镜像名不含 / 时自动选中 Git 源码更新', async ({ page
   await page.locator('#container-upgrade-close').click();
 });
 
-test('单个非 Compose 容器直接拉取镜像', async ({ page }) => {
+test('单个非 Compose 容器使用 Watchtower 一次性更新', async ({ page }) => {
   await fileFixture(page, { dbCompose: false });
   await openContainers(page);
   const row = page.locator('#container-table-body tr').filter({ hasText: 'db-postgres' });
@@ -114,11 +114,9 @@ test('单个非 Compose 容器直接拉取镜像', async ({ page }) => {
   const dialog = page.locator('#container-upgrade-dialog');
   await expect(dialog).toBeVisible();
   await expect(page.locator('#container-upgrade-image')).toHaveText('postgres:16');
-  await expect(page.locator('#container-upgrade-type-badge')).toContainText('单容器');
+  await expect(page.locator('#container-upgrade-type-badge')).toContainText('Watchtower');
   await expect(page.locator('input[name="containerUpgradeMode"][value="image_pull"]')).toBeChecked();
-  await expect(page.locator('#container-upgrade-command')).toHaveValue(/^docker pull 'postgres:16' && /);
-  await expect(page.locator('#container-upgrade-command')).not.toHaveValue(/docker restart/);
-  await expect(page.locator('#container-upgrade-command')).toHaveValue(/docker run -d/);
+  await expect(page.locator('#container-upgrade-command')).toHaveValue("docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower --run-once --cleanup 'db-postgres'");
   await page.locator('#container-upgrade-close').click();
 });
 

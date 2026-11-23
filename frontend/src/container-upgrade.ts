@@ -3,9 +3,6 @@ import type { ContainerEntry } from './container-types';
 /** 升级弹窗的三个单选值，也是自动检测会选中的值。 */
 export type UpgradeMode = 'compose_git' | 'compose_pull' | 'image_pull';
 
-/** 与后端 buildContainerActionCommand 的 upgrade 命令上限保持一致。 */
-export const UPGRADE_COMMAND_LIMIT = 2048;
-
 export interface UpgradeDetection {
   workingDir: string;
   project: string;
@@ -18,8 +15,6 @@ export interface UpgradeDetection {
   recommendedCommand: string;
   badge: string;
   hint: string;
-  /** 独立容器按 inspect 参数重建的命令；inspect 不可用时为 null。 */
-  recreateCommand: string | null;
 }
 
 export interface UpgradeModeCommand {
@@ -55,7 +50,7 @@ function dirname(path: string): string {
   return index > 0 ? path.slice(0, index) : '';
 }
 
-/** 根据 docker inspect 生成尽量保真、且失败时自动回滚的 docker run 命令（供「编辑容器」与独立容器升级使用）。 */
+/** 根据 docker inspect 生成尽量保真、且失败时自动回滚的 docker run 命令（供「编辑容器」功能使用）。 */
 export function buildRecreateCommand(inspect: Record<string, any>, containerName: string, imageOverride?: string): string {
   const config = inspect.Config ?? {};
   const host = inspect.HostConfig ?? {};
@@ -139,16 +134,15 @@ export function buildRecreateCommand(inspect: Record<string, any>, containerName
 
 /**
  * 生成某个升级模式对应的命令。
- * 目录可定位时先 cd 到 Compose 工作目录，其余保持简洁、可手工编辑。
+ * - 普通单容器：使用 Watchtower 一次性更新，自动复用原配置重建并清理旧镜像；
+ * - Compose 项目：根据目录与配置文件调用 docker compose pull 或 git pull。
  */
 export function buildUpgradeModeCommand(mode: UpgradeMode, entry: UpgradeTarget, detected: UpgradeDetection): UpgradeModeCommand {
   const image = detected.image || entry.image;
   const pull = `docker pull ${shellQuote(image)}`;
   const prefix = detected.workingDir ? `cd ${shellQuote(detected.workingDir)} && ` : '';
   const compose = 'docker compose';
-  const recreate = detected.recreateCommand;
-  // docker restart 只重启旧容器，不会切换到新拉取的镜像；必须按原参数重建。
-  const recreateCommand = recreate ? `${pull} && ${recreate}` : pull;
+  const watchtower = `docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower --run-once --cleanup ${shellQuote(entry.name)}`;
   const serviceArg = detected.service ? ` ${shellQuote(detected.service)}` : '';
   const composeRecreate: UpgradeModeCommand = {
     command: `${pull} && ${prefix}${compose} up -d --force-recreate --no-deps${serviceArg}`,
@@ -156,19 +150,16 @@ export function buildUpgradeModeCommand(mode: UpgradeMode, entry: UpgradeTarget,
     badge: '单镜像更新 (Compose 重建)',
   };
   const single: UpgradeModeCommand = {
-    command: recreateCommand,
-    hint: recreate
-      ? '非 Compose 容器：拉取最新镜像后，按 inspect 参数停止并重新创建容器；创建失败时会恢复旧容器。请确认端口、挂载与环境变量。'
-      : '未取得完整重建参数，本命令只拉取镜像，不会改变正在运行的容器；请使用「编辑容器」核对参数后重新部署。',
-    badge: recreate ? '单容器 (保留配置重建)' : '单容器 (仅拉取镜像)',
+    command: watchtower,
+    hint: '非 Compose 容器：使用 Watchtower 一次性更新该容器，自动从 Docker 引擎读取并复用所有运行参数，拉取新镜像后重建，并自动清理旧镜像。',
+    badge: '单容器 (Watchtower 更新)',
   };
 
   if (mode === 'image_pull') {
-    // Compose 容器手动选择单镜像更新时，也必须 force-recreate 才会使用新镜像。
     return detected.isCompose ? composeRecreate : single;
   }
   if (!detected.isCompose) {
-    return { ...single, hint: `${single.hint} 当前容器未检测到 Compose 标签，已回退为单容器模式。` };
+    return { ...single, hint: `${single.hint} 当前容器未检测到 Compose 标签，已回退为 Watchtower 单容器更新。` };
   }
   if (mode === 'compose_pull') {
     return {
@@ -185,23 +176,13 @@ export function buildUpgradeModeCommand(mode: UpgradeMode, entry: UpgradeTarget,
 }
 
 function finishDetection(base: UpgradeDetection, entry: UpgradeTarget): UpgradeDetection {
-  let result = buildUpgradeModeCommand(base.recommendedMode, entry, base);
-  // 单容器重建命令可能超过后端 2048 字节限制；保留可执行的 pull，并提示使用编辑容器。
-  if (result.command.length > UPGRADE_COMMAND_LIMIT) {
-    const image = base.image || entry.image;
-    base.recreateCommand = null;
-    result = {
-      command: `docker pull ${shellQuote(image)}`,
-      hint: '容器参数过多导致重建命令超过长度限制；本命令只拉取镜像。请使用「编辑容器」复制重建命令后手动执行，或精简环境变量与标签。',
-      badge: '单容器 (仅拉取镜像)',
-    };
-  }
+  const result = buildUpgradeModeCommand(base.recommendedMode, entry, base);
   return { ...base, recommendedCommand: result.command, badge: result.badge, hint: result.hint };
 }
 
 /**
  * 识别规则：
- * 1. 先看 Docker Compose 标签；不是 Compose 容器 → 直接 pull（单镜像更新）；
+ * 1. 先看 Docker Compose 标签；不是 Compose 容器 → Watchtower 单容器更新；
  * 2. 是 Compose 容器且镜像名含 `/` → compose pull + up；
  * 3. 是 Compose 容器且镜像名不含 `/` → git pull + up --build。
  *
@@ -223,15 +204,10 @@ export function detectUpgradeStrategy(inspect: unknown, entry: UpgradeTarget): U
   const recommendedMode: UpgradeMode = !isCompose
     ? 'image_pull'
     : image.includes('/') ? 'compose_pull' : 'compose_git';
-  let recreateCommand: string | null = null;
-  if (!isCompose) {
-    try { recreateCommand = buildRecreateCommand(item, entry.name, image); }
-    catch { recreateCommand = null; }
-  }
   return finishDetection({
     workingDir, project, configFile, service, image, name: entry.name, isCompose,
     recommendedMode,
-    recommendedCommand: '', badge: '', hint: '', recreateCommand,
+    recommendedCommand: '', badge: '', hint: '',
   }, entry);
 }
 
@@ -240,11 +216,11 @@ export function fallbackUpgradeDetection(entry: UpgradeTarget): UpgradeDetection
     workingDir: '', project: '', configFile: '', service: '',
     image: entry.image, name: entry.name, isCompose: false,
     recommendedMode: 'image_pull',
-    recommendedCommand: '', badge: '', hint: '', recreateCommand: null,
+    recommendedCommand: '', badge: '', hint: '',
   }, entry);
   return {
     ...detection,
-    hint: '无法读取容器 inspect 元数据，已按非 Compose 容器直接拉取镜像；请确认容器类型后再执行。',
-    badge: '无法识别，按单容器处理',
+    hint: '无法读取容器 inspect 元数据，已回退为使用 Watchtower 一次性更新；将直接连接 Docker 引擎安全升级。',
+    badge: '单容器 (Watchtower 更新)',
   };
 }

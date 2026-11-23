@@ -82,6 +82,9 @@ test('容器动作支持 inspect、pull、prune_images 和安全 upgrade', () =>
   const singleUpgrade = 'docker pull redis:alpine && docker restart my-redis';
   assert.equal(buildContainerActionCommand('upgrade', singleUpgrade, undefined), singleUpgrade);
 
+  const watchtowerUpgrade = "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower --run-once --cleanup 'my-redis'";
+  assert.equal(buildContainerActionCommand('upgrade', watchtowerUpgrade, undefined), watchtowerUpgrade);
+
   // 危险命令被拒绝
   assert.equal(buildContainerActionCommand('upgrade', 'rm -rf /', undefined), null);
   assert.equal(buildContainerActionCommand('upgrade', 'cat /etc/passwd', undefined), null);

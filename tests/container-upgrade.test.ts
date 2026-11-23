@@ -30,19 +30,17 @@ function composeInspect(image = 'nginx:1.25') {
   }];
 }
 
-test('非 Compose 容器会自动拉取镜像并按 inspect 参数重建，而不是 restart', () => {
+test('非 Compose 容器会自动使用 Watchtower 一次性升级，而不是 pull + restart', () => {
   const detected = detectUpgradeStrategy([{ ...common, RepoDigests: [] }], entry);
   assert.equal(detected.isCompose, false);
   assert.equal(detected.recommendedMode, 'image_pull');
   assert.equal(detected.recommendedCommand.includes('docker restart'), false);
-  assert.match(detected.recommendedCommand, /^docker pull 'nginx:1.25' && /);
-  assert.match(detected.recommendedCommand, /docker run -d/);
-  assert.match(detected.recommendedCommand, /MODE=production/);
-  assert.match(detected.recommendedCommand, /8080:80\/tcp/);
-  assert.match(detected.recommendedCommand, /\/srv\/www/);
-  assert.match(detected.recommendedCommand, /docker rename "\$backup" "\$name"/);
-  assert.ok(detected.recommendedCommand.length <= 2048);
-  assert.match(detected.hint, /按 inspect 参数/);
+  assert.equal(
+    detected.recommendedCommand,
+    "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower --run-once --cleanup 'web-nginx'",
+  );
+  assert.match(detected.badge, /Watchtower/);
+  assert.match(detected.hint, /Watchtower/);
 });
 
 test('Compose 容器镜像名不含 / 时选中 Git 源码更新', () => {
@@ -70,7 +68,7 @@ test('镜像名判断使用列表显示的 image，inspect 中的镜像名不覆
   assert.match(detected.recommendedCommand, /git pull/);
 });
 
-test('三个单选模式分别生成对应命令，且非 Compose 手动选 Compose 模式会安全回退', () => {
+test('三个单选模式分别生成对应命令，且非 Compose 手动选 Compose 模式会安全回退到 Watchtower', () => {
   const detected = detectUpgradeStrategy(composeInspect('nginx:1.25'), entry);
   assert.match(buildUpgradeModeCommand('compose_git', entry, detected).command, /git pull && docker compose up -d --build/);
   assert.match(buildUpgradeModeCommand('compose_pull', entry, detected).command, /docker compose pull && docker compose up -d/);
@@ -82,8 +80,10 @@ test('三个单选模式分别生成对应命令，且非 Compose 手动选 Comp
     assert.equal(result.command.includes('git pull'), false);
     assert.equal(result.command.includes('docker compose'), false);
     assert.equal(result.command.includes('docker restart'), false);
-    assert.match(result.command, /^docker pull 'nginx:1.25' && /);
-    assert.match(result.command, /docker run -d/);
+    assert.equal(
+      result.command,
+      "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower --run-once --cleanup 'web-nginx'",
+    );
   }
 });
 
@@ -98,14 +98,16 @@ test('编辑容器仍按 inspect 参数重建且失败时自动回滚旧容器',
   assert.match(recreate, /docker start "\$name"/);
 });
 
-test('inspect 失败与畸形响应回退为直接 pull，不生成 git 或 compose', () => {
+test('inspect 失败与畸形响应回退为 Watchtower 单容器更新，不生成 git 或 compose', () => {
   for (const response of [undefined, null, [], {}, 'not-json']) {
     const detected = detectUpgradeStrategy(response, entry);
     assert.deepEqual(detected, fallbackUpgradeDetection(entry));
   }
   const fallback = fallbackUpgradeDetection(entry);
   assert.equal(fallback.recommendedMode, 'image_pull');
-  assert.equal(fallback.recommendedCommand, "docker pull 'nginx:1.25'");
+  assert.equal(
+    fallback.recommendedCommand,
+    "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower --run-once --cleanup 'web-nginx'",
+  );
   assert.equal(fallback.recommendedCommand.includes('docker restart'), false);
-  assert.equal(fallback.recreateCommand, null);
 });
